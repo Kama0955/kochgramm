@@ -12,7 +12,6 @@ struct LoginView: View {
         ZStack {
             Color.black.ignoresSafeArea()
             
-            // Мягкое свечение сверху
             Circle()
                 .fill(Color.blue.opacity(0.25))
                 .frame(width: 500, height: 500)
@@ -28,7 +27,6 @@ struct LoginView: View {
             VStack(spacing: 32) {
                 Spacer()
                 
-                // Логотип
                 VStack(spacing: 20) {
                     ZStack {
                         RoundedRectangle(cornerRadius: 32)
@@ -65,7 +63,6 @@ struct LoginView: View {
                 
                 Spacer()
                 
-                // Форма входа
                 VStack(spacing: 16) {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Введите номер телефона")
@@ -82,7 +79,6 @@ struct LoginView: View {
                                 .keyboardType(.phonePad)
                                 .foregroundColor(.white)
                                 .font(.system(size: 18))
-                                .accentColor(Color.blue)
                         }
                         .padding(18)
                         .background(Color.white.opacity(0.06))
@@ -112,12 +108,6 @@ struct LoginView: View {
                             )
                             .cornerRadius(16)
                     }
-                    
-                    Text("Продолжая, вы соглашаетесь с условиями использования")
-                        .font(.system(size: 11))
-                        .foregroundColor(Color.gray.opacity(0.7))
-                        .multilineTextAlignment(.center)
-                        .padding(.top, 4)
                 }
                 .padding(.horizontal, 24)
                 .padding(.bottom, 40)
