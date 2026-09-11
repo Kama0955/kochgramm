@@ -14,27 +14,22 @@ jobs:
       - name: Setup Xcode
         run: sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
 
-      - name: Prepare Project Structure
+      - name: Prepare
         run: |
           mkdir -p kochgramm
-          cp *.swift kochgramm/
+          cp kochgrammApp.swift kochgramm/
           cp Info.plist kochgramm/
-          
-          cat > kochgramm/project.yml << 'EOF'
+          cd kochgramm
+          cat > project.yml << 'EOF'
           name: kochgramm
           options:
-            bundleIdPrefix: com.kochgramm
             deploymentTarget:
               iOS: "16.0"
           targets:
             kochgramm:
               type: application
               platform: iOS
-              sources:
-                - path: .
-                  excludes:
-                    - "project.yml"
-                    - "build"
+              sources: [kochgrammApp.swift]
               info:
                 path: Info.plist
               settings:
@@ -43,37 +38,34 @@ jobs:
                   GENERATE_INFOPLIST_FILE: NO
                   INFOPLIST_FILE: Info.plist
                   SWIFT_VERSION: "5.0"
-                  SWIFT_OPTIMIZATION_LEVEL: "-Onone"
-                  SWIFT_COMPILATION_MODE: "singlefile"
-                  ENABLE_PREVIEWS: "NO"
           EOF
 
       - name: Install XcodeGen
         run: brew install xcodegen
 
-      - name: Generate Xcode Project
+      - name: Generate
         run: |
           cd kochgramm
           xcodegen generate
 
-      - name: Build IPA
+      - name: Build
         run: |
           cd kochgramm
-          xcodebuild clean build \
+          xcodebuild build \
             -project kochgramm.xcodeproj \
             -scheme kochgramm \
-            -configuration Debug \
             -sdk iphoneos \
+            -configuration Debug \
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY=""
           
-          mkdir -p Payload
+          mkdir Payload
           cp -r build/Build/Products/Debug-iphoneos/kochgramm.app Payload/
           zip -r kochgramm.ipa Payload
 
-      - name: Upload IPA
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
           name: kochgramm-IPA
