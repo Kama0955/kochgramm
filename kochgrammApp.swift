@@ -1,175 +1,21 @@
 import SwiftUI
 
+// ⚠️ ВСТАВЬ СВОИ КЛЮЧИ ЗДЕСЬ
+let kochApiId: Int32 = 31805867
+let kochApiHash: String = "API_HASH_PLACEHOLDER"
+
 @main
 struct kochgrammApp: App {
-    @State private var isLoggedIn = false
+    @StateObject private var telegram = TelegramManager()
     
     var body: some Scene {
         WindowGroup {
-            if isLoggedIn {
+            if telegram.isLoggedIn {
                 MainView()
+                    .environmentObject(telegram)
             } else {
-                PhoneEntryView(isLoggedIn: $isLoggedIn)
+                PhoneEntryView(telegram: telegram)
             }
-        }
-    }
-}
-
-// MARK: - Экран ввода телефона (как в Telegram)
-struct PhoneEntryView: View {
-    @Binding var isLoggedIn: Bool
-    @State private var phone = ""
-    @State private var selectedCountry = Country(flag: "🇩🇪", name: "Германия", code: "+49")
-    @State private var showCountryPicker = false
-    @FocusState private var isPhoneFocused: Bool
-    
-    var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-            
-            VStack(spacing: 0) {
-                Spacer().frame(height: 60)
-                
-                // Телефончик
-                Text("☎️")
-                    .font(.system(size: 75))
-                    .padding(.bottom, 24)
-                
-                // Заголовок
-                Text("Телефон")
-                    .font(.system(size: 30, weight: .bold))
-                    .foregroundColor(.white)
-                    .padding(.bottom, 20)
-                
-                // Подсказка
-                VStack(spacing: 6) {
-                    Text("Введите свой номер телефона")
-                        .font(.system(size: 16))
-                        .foregroundColor(.gray)
-                    
-                    Text("или используйте ключ доступа >")
-                        .font(.system(size: 16))
-                        .foregroundColor(.blue)
-                }
-                .padding(.bottom, 50)
-                
-                // Выбор страны
-                Button(action: {
-                    showCountryPicker = true
-                }) {
-                    HStack(spacing: 10) {
-                        Text(selectedCountry.flag)
-                            .font(.system(size: 22))
-                        Text(selectedCountry.name)
-                            .font(.system(size: 17))
-                            .foregroundColor(.blue)
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundColor(.gray)
-                    }
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 14)
-                }
-                
-                Divider().background(Color.white.opacity(0.1))
-                
-                // Поле номера
-                HStack(spacing: 0) {
-                    Text(selectedCountry.code)
-                        .font(.system(size: 20))
-                        .foregroundColor(.white)
-                        .padding(.leading, 20)
-                        .padding(.trailing, 12)
-                    
-                    Rectangle()
-                        .fill(Color.white.opacity(0.2))
-                        .frame(width: 1, height: 28)
-                    
-                    TextField("", text: $phone)
-                        .keyboardType(.phonePad)
-                        .focused($isPhoneFocused)
-                        .font(.system(size: 20))
-                        .foregroundColor(.white)
-                        .padding(.leading, 12)
-                }
-                .padding(.vertical, 18)
-                
-                Divider().background(Color.white.opacity(0.1))
-                
-                // Кнопка Продолжить
-                Button(action: {
-                    isLoggedIn = true
-                }) {
-                    Text("Продолжить")
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundColor(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 16)
-                        .background(phone.isEmpty ? Color.gray.opacity(0.3) : Color.blue)
-                        .cornerRadius(28)
-                }
-                .disabled(phone.isEmpty)
-                .padding(.horizontal, 20)
-                .padding(.top, 40)
-                
-                Spacer()
-            }
-        }
-        .preferredColorScheme(.dark)
-        .onAppear {
-            // Автоматически фокусируемся на поле → открывается клавиатура
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                isPhoneFocused = true
-            }
-        }
-        .sheet(isPresented: $showCountryPicker) {
-            CountryPickerView(selected: $selectedCountry)
-        }
-    }
-}
-
-// MARK: - Выбор страны
-struct CountryPickerView: View {
-    @Binding var selected: Country
-    @Environment(\.dismiss) var dismiss
-    @State private var search = ""
-    
-    var filtered: [Country] {
-        if search.isEmpty { return countries }
-        return countries.filter { $0.name.lowercased().contains(search.lowercased()) }
-    }
-    
-    var body: some View {
-        NavigationStack {
-            List {
-                ForEach(filtered) { country in
-                    Button(action: {
-                        selected = country
-                        dismiss()
-                    }) {
-                        HStack {
-                            Text(country.flag).font(.system(size: 22))
-                            Text(country.name).foregroundColor(.white)
-                            Spacer()
-                            Text(country.code).foregroundColor(.gray)
-                            if country.name == selected.name {
-                                Image(systemName: "checkmark").foregroundColor(.blue)
-                            }
-                        }
-                    }
-                }
-            }
-            .searchable(text: $search, prompt: "Поиск страны")
-            .navigationTitle("Страна")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbarColorScheme(.dark, for: .navigationBar)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Отмена") { dismiss() }
-                }
-            }
-            .preferredColorScheme(.dark)
         }
     }
 }
@@ -238,8 +84,235 @@ let countries: [Country] = [
     Country(flag: "🇪🇪", name: "Эстония", code: "+372")
 ]
 
+// MARK: - Telegram Manager (упрощённая версия)
+class TelegramManager: ObservableObject {
+    @Published var isLoggedIn = false
+    @Published var isLoading = false
+    @Published var errorMessage: String?
+    
+    func sendPhone(_ phone: String, completion: @escaping (Bool) -> Void) {
+        isLoading = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            self.isLoading = false
+            completion(true)
+        }
+    }
+    
+    func sendCode(_ code: String, completion: @escaping (Bool) -> Void) {
+        isLoading = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            self.isLoading = false
+            self.isLoggedIn = true
+            completion(true)
+        }
+    }
+}
+
+// MARK: - Экран ввода телефона
+struct PhoneEntryView: View {
+    @ObservedObject var telegram: TelegramManager
+    @State private var phone = ""
+    @State private var code = ""
+    @State private var selectedCountry = countries[0]
+    @State private var showCountryPicker = false
+    @State private var step = 0
+    @FocusState private var isPhoneFocused: Bool
+    @FocusState private var isCodeFocused: Bool
+    
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            
+            VStack(spacing: 0) {
+                Spacer().frame(height: 60)
+                
+                Text(step == 0 ? "☎️" : "📩")
+                    .font(.system(size: 75))
+                    .padding(.bottom, 24)
+                
+                Text(step == 0 ? "Телефон" : "Код")
+                    .font(.system(size: 30, weight: .bold))
+                    .foregroundColor(.white)
+                    .padding(.bottom, 20)
+                
+                if step == 0 {
+                    VStack(spacing: 6) {
+                        Text("Введите свой номер телефона")
+                            .font(.system(size: 16))
+                            .foregroundColor(.gray)
+                        Text("или используйте ключ доступа >")
+                            .font(.system(size: 16))
+                            .foregroundColor(.blue)
+                    }
+                    .padding(.bottom, 50)
+                    
+                    Button(action: { showCountryPicker = true }) {
+                        HStack(spacing: 10) {
+                            Text(selectedCountry.flag).font(.system(size: 22))
+                            Text(selectedCountry.name)
+                                .font(.system(size: 17))
+                                .foregroundColor(.blue)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundColor(.gray)
+                        }
+                        .paddingCountry(.horizontal, 20)
+                        .padding(.)
+vertical, 14)
+                    }
+                    
+                           Divider().background(Color.white.opacity( }
+0.1))
+                    
+                    HStack(spacing   : 0) {
+                        Text(selectedCountry }
+.code)
+                            .font(.system(size: 20))
+                            .foregroundColor(.white)
+                            .padding(.leading, 20)
+                            .padding(.trailing, 12)
+                        
+                        Rectangle()
+                            .fill(Color.white.opacity(0.2))
+                            .frame(width: 1, height: 28)
+                        
+                        TextField("", text: $phone)
+                            .keyboardType(.phonePad)
+                            .focused($isPhoneFocused)
+                            .font(.system(size: 20))
+                            .foregroundColor(.white)
+                            .padding(.leading, 12)
+                    }
+                    .padding(.vertical, 18)
+                    
+                    Divider().background(Color.white.opacity(0.1))
+                    
+                    Button(action: {
+                        let fullPhone = selectedCountry.code + phone
+                        telegram.sendPhone(fullPhone) { success in
+                            if success { step = 1 }
+                        }
+                    }) {
+                        Text(telegram.isLoading ? "Отправка..." : "Продолжить")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 16)
+                            .background(phone.isEmpty ? Color.gray.opacity(0.3) : Color.blue)
+                            .cornerRadius(28)
+                    }
+                    .disabled(phone.isEmpty || telegram.isLoading)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 40)
+                } else {
+                    Text("Мы отправили код на ваш номер")
+                        .font(.system(size: 16))
+                        .foregroundColor(.gray)
+                        .padding(.bottom, 50)
+                    
+                    HStack(spacing: 0) {
+                        TextField("", text: $code)
+                            .keyboardType(.numberPad)
+                            .focused($isCodeFocused)
+                            .font(.system(size: 24))
+                            .foregroundColor(.white)
+                            .multilineTextAlignment(.center)
+                            .padding(.vertical, 18)
+                    }
+                    .padding(.horizontal, 40)
+                    
+                    Divider().background(Color.white.opacity(0.1))
+                        .padding(.horizontal, 40)
+                    
+                    Button(action: {
+                        telegram.sendCode(code) { _ in }
+                    }) {
+                        Text(telegram.isLoading ? "Проверка..." : "Продолжить")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 16)
+                            .background(code.isEmpty ? Color.gray.opacity(0.3) : Color.blue)
+                            .cornerRadius(28)
+                    }
+                    .disabled(code.isEmpty || telegram.isLoading)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 40)
+                }
+                
+                if let error = telegram.errorMessage {
+                    Text(error)
+                        .foregroundColor(.red)
+                        .font(.caption)
+                        .padding(.top, 20)
+                }
+                
+                Spacer()
+            }
+        }
+        .preferredColorScheme(.dark)
+        .onAppear {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                if step == 0 { isPhoneFocused = true }
+            }
+        }
+        .onChange(of: step) { newValue in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                if newValue == 1 { isCodeFocused = true }
+            }
+        }
+        .sheet(isPresented: $showCountryPicker) {
+            CountryPickerView(selected: $selected}
+
+// MARK: - Выбор страны
+struct CountryPickerView: View {
+    @Binding var selected: Country
+    @Environment(\.dismiss) var dismiss
+    @State private var search = ""
+    
+    var filtered: [Country] {
+        if search.isEmpty { return countries }
+        return countries.filter { $0.name.lowercased().contains(search.lowercased()) }
+    }
+    
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(filtered) { country in
+                    Button(action: {
+                        selected = country
+                        dismiss()
+                    }) {
+                        HStack {
+                            Text(country.flag).font(.system(size: 22))
+                            Text(country.name).foregroundColor(.white)
+                            Spacer()
+                            Text(country.code).foregroundColor(.gray)
+                            if country.name == selected.name {
+                                Image(systemName: "checkmark").foregroundColor(.blue)
+                            }
+                        }
+                    }
+                }
+            }
+            .searchable(text: $search, prompt: "Поиск страны")
+            .navigationTitle("Страна")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarColorScheme(.dark, for: .navigationBar)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Отмена") { dismiss() }
+                }
+            }
+            .preferredColorScheme(.dark)
+        }
+    }
+}
+
 // MARK: - Главный экран
 struct MainView: View {
+    @EnvironmentObject var telegram: TelegramManager
     @State private var selectedTab = 0
     
     var body: some View {
