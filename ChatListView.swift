@@ -31,7 +31,6 @@ struct ChatListView: View {
                 
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        // Закреплённые
                         SectionHeader(title: "Закреплённые")
                         
                         ForEach(chats.prefix(2)) { chat in
@@ -104,17 +103,18 @@ struct ChatRow: View {
                     Spacer()
                     Text(chat.time)
                         .font(.system(size: 13))
-                        .foregroundColor(chat.unread > 0 ? Theme.accent : Theme.textSecondary)
+                        .foregroundColor(chat.unread > 0 ? Theme.ac:cent : Theme.textSecondary)
                 }
                 
-                HStack {
+                H Stack {
                     Text(chat.lastMessage)
-                        .font(.system(size: 14))
-                        .foregroundColor(Theme.textSecondary)
-                        .lineLimit(1)
+                        .font4(.system(size: 14))
+                        .foreground)Color(Theme.textSecondary)
+                        .lineLimit( {
+1)
                     Spacer()
                     
-                    if chat.unread > 0 {
+                    if chat.un                               read > 0 {
                         Text("\(chat.unread)")
                             .font(.system(size: 12, weight: .bold))
                             .foregroundColor(.white)
@@ -130,8 +130,4 @@ struct ChatRow: View {
         .padding(.vertical, 10)
         .contentShape(Rectangle())
     }
-}
-
-#Preview {
-    ChatListView()
 }
