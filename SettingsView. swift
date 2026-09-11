@@ -1,0 +1,132 @@
+import SwiftUI
+
+struct SettingsView: View {
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Theme.background.ignoresSafeArea()
+                
+                ScrollView {
+                    VStack(spacing: 12) {
+                        // Профиль
+                        HStack(spacing: 14) {
+                            Circle()
+                                .fill(Theme.accentGradient)
+                                .frame(width: 64, height: 64)
+                                .overlay(
+                                    Text("K")
+                                        .font(.system(size: 26, weight: .bold))
+                                        .foregroundColor(.white)
+                                )
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Ваш профиль")
+                                    .font(.system(size: 18, weight: .semibold))
+                                    .foregroundColor(.white)
+                                Text("+49 000 000 00 00")
+                                    .font(.system(size: 14))
+                                    .foregroundColor(Theme.textSecondary)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .foregroundColor(Theme.textSecondary)
+                        }
+                        .padding(16)
+                        .background(Theme.surface)
+                        .cornerRadius(Theme.cornerMedium)
+                        .padding(.horizontal, 16)
+                        
+                        // Разделы
+                        SettingsSection(title: "Основные", items: [
+                            SettingsItem(icon: "paintbrush.fill", color: .purple, title: "Внешний вид"),
+                            SettingsItem(icon: "bell.fill", color: .red, title: "Уведомления"),
+                            SettingsItem(icon: "lock.fill", color: .green, title: "Конфиденциальность"),
+                            SettingsItem(icon: "message.fill", color: .blue, title: "Сообщения")
+                        ])
+                        
+                        SettingsSection(title: "Медиа", items: [
+                            SettingsItem(icon: "photo.fill", color: .orange, title: "Медиа и файлы"),
+                            SettingsItem(icon: "speaker.wave.2.fill", color: .pink, title: "Плеер"),
+                            SettingsItem(icon: "camera.fill", color: .indigo, title: "Камера")
+                        ])
+                        
+                        SettingsSection(title: "Дополнительно", items: [
+                            SettingsItem(icon: "sparkles", color: .cyan, title: "NEXORA AI"),
+                            SettingsItem(icon: "globe", color: .teal, title: "Перевод"),
+                            SettingsItem(icon: "puzzlepiece.fill", color: .yellow, title: "Плагины"),
+                            SettingsItem(icon: "antenna.radiowaves.left.and.right", color: .mint, title: "Сессии")
+                        ])
+                        
+                        Text("kochgramm 1.0")
+                            .font(.system(size: 13))
+                            .foregroundColor(Theme.textSecondary)
+                            .padding(.top, 20)
+                            .padding(.bottom, 40)
+                    }
+                }
+            }
+            .navigationTitle("Настройки")
+            .navigationBarTitleDisplayMode(.large)
+            .toolbarColorScheme(.dark, for: .navigationBar)
+        }
+        .preferredColorScheme(.dark)
+    }
+}
+
+struct SettingsItem: Identifiable {
+    let id = UUID()
+    let icon: String
+    let color: Color
+    let title: String
+}
+
+struct SettingsSection: View {
+    let title: String
+    let items: [SettingsItem]
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(Theme.textSecondary)
+                .padding(.horizontal, 28)
+            
+            VStack(spacing: 0) {
+                ForEach(items) { item in
+                    HStack(spacing: 14) {
+                        Image(systemName: item.icon)
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundColor(.white)
+                            .frame(width: 30, height: 30)
+                            .background(item.color)
+                            .cornerRadius(8)
+                        
+                        Text(item.title)
+                            .font(.system(size: 16))
+                            .foregroundColor(Theme.textPrimary)
+                        
+                        Spacer()
+                        
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(Theme.textSecondary)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    
+                    if item.id != items.last?.id {
+                        Divider()
+                            .background(Theme.divider)
+                            .padding(.leading, 60)
+                    }
+                }
+            }
+            .background(Theme.surface)
+            .cornerRadius(Theme.cornerMedium)
+            .padding(.horizontal, 16)
+        }
+    }
+}
+
+#Preview {
+    SettingsView()
+}
