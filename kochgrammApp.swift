@@ -2,9 +2,15 @@ import SwiftUI
 
 @main
 struct kochgrammApp: App {
+    @State private var isLoggedIn = false
+    
     var body: some Scene {
         WindowGroup {
-            MainView()
+            if isLoggedIn {
+                MainView()
+            } else {
+                LoginView(isLoggedIn: $isLoggedIn)
+            }
         }
     }
 }
