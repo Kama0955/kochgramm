@@ -17,7 +17,8 @@ struct SettingsView: View {
                                         .font(.system(size: 26, weight: .bold))
                                         .foregroundColor(.white)
                                 )
-                            VStack(alignment: .leading, spacing Text("Ваш профиль")
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Ваш профиль")
                                     .font(.system(size: 18, weight: .semibold))
                                     .foregroundColor(.white)
                                 Text("+49 000 000 00 00")
@@ -33,24 +34,24 @@ struct SettingsView: View {
                         .cornerRadius(Theme.cornerMedium)
                         .padding(.horizontal, 16)
                         
-                        SettingsSection(title: "Основные", items: [
-                            SettingsItem(icon: "paintbrush.fill", color: .purple, title: "Внешний вид"),
-                            SettingsItem(icon: "bell.fill", color: .red, title: "Уведомления"),
-                            SettingsItem(icon: "lock.fill", color: .green, title: "Конфиденциальность"),
-                            SettingsItem(icon: "message.fill", color: .blue, title: "Сообщения")
+                        SettingsSectionView(title: "Основные", items: [
+                            SettingsItemData(icon: "paintbrush.fill", color: .purple, title: "Внешний вид"),
+                            SettingsItemData(icon: "bell.fill", color: .red, title: "Уведомления"),
+                            SettingsItemData(icon: "lock.fill", color: .green, title: "Конфиденциальность"),
+                            SettingsItemData(icon: "message.fill", color: .blue, title: "Сообщения")
                         ])
                         
-                        SettingsSection(title: "Медиа", items: [
-                            SettingsItem(icon: "photo.fill", color: .orange, title: "Медиа и файлы"),
-                            SettingsItem(icon: "speaker.wave.2.fill", color: .pink, title: "Плеер"),
-                            SettingsItem(icon: "camera.fill", color: .indigo, title: "Камера")
+                        SettingsSectionView(title: "Медиа", items: [
+                            SettingsItemData(icon: "photo.fill", color: .orange, title: "Медиа и файлы"),
+                            SettingsItemData(icon: "speaker.wave.2.fill", color: .pink, title: "Плеер"),
+                            SettingsItemData(icon: "camera.fill", color: .indigo, title: "Камера")
                         ])
                         
-                        SettingsSection(title: "Дополнительно", items: [
-                            SettingsItem(icon: "sparkles", color: .cyan, title: "NEXORA AI"),
-                            SettingsItem(icon: "globe", color: .teal, title: "Перевод"),
-                            SettingsItem(icon: "puzzlepiece.fill", color: .yellow, title: "Плагины"),
-                            SettingsItem(icon: "antenna.radiowaves.left.and.right", color: .mint, title: "Сессии")
+                        SettingsSectionView(title: "Дополнительно", items: [
+                            SettingsItemData(icon: "sparkles", color: .cyan, title: "NEXORA AI"),
+                            SettingsItemData(icon: "globe", color: .teal, title: "Перевод"),
+                            SettingsItemData(icon: "puzzlepiece.fill", color: .yellow, title: "Плагины"),
+                            SettingsItemData(icon: "antenna.radiowaves.left.and.right", color: .mint, title: "Сессии")
                         ])
                         
                         Text("kochgramm 1.0")
@@ -69,16 +70,16 @@ struct SettingsView: View {
     }
 }
 
-struct SettingsItem: Identifiable {
+struct SettingsItemData: Identifiable {
     let id = UUID()
     let icon: String
     let color: Color
     let title: String
 }
 
-struct SettingsSection: View {
+struct SettingsSectionView: View {
     let title: String
-    let items: [SettingsItem]
+    let items: [SettingsItemData]
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
