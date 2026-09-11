@@ -1,4 +1,3 @@
-
 name: Build iOS IPA
 
 on:
@@ -19,11 +18,9 @@ jobs:
         run: |
           mkdir -p kochgramm
           cp kochgrammApp.swift kochgramm/
-          cp LoginView.swift kochgramm/
           cp Info.plist kochgramm/
           cp AppIcon.png kochgramm/
           
-          # Создаём Assets.xcassets с иконкой
           mkdir -p kochgramm/Assets.xcassets/AppIcon.appiconset
           
           sips -z 120 120 AppIcon.png --out kochgramm/Assets.xcassets/AppIcon.appiconset/icon-120.png
@@ -58,7 +55,6 @@ jobs:
               platform: iOS
               sources:
                 - kochgrammApp.swift
-                - LoginView.swift
                 - Assets.xcassets
               info:
                 path: Info.plist
