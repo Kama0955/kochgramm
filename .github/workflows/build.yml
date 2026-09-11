@@ -38,6 +38,10 @@ jobs:
                   PRODUCT_BUNDLE_IDENTIFIER: com.kochgramm.app
                   GENERATE_INFOPLIST_FILE: NO
                   INFOPLIST_FILE: Info.plist
+                  SWIFT_VERSION: "5.0"
+                  SWIFT_OPTIMIZATION_LEVEL: "-Onone"
+                  SWIFT_COMPILATION_MODE: "singlefile"
+                  ENABLE_PREVIEWS: "NO"
           EOF
 
       - name: Install XcodeGen
@@ -54,7 +58,7 @@ jobs:
           xcodebuild clean build \
             -project kochgramm.xcodeproj \
             -scheme kochgramm \
-            -configuration Release \
+            -configuration Debug \
             -sdk iphoneos \
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
@@ -62,7 +66,7 @@ jobs:
             CODE_SIGN_IDENTITY=""
           
           mkdir -p Payload
-          cp -r build/Build/Products/Release-iphoneos/kochgramm.app Payload/
+          cp -r build/Build/Products/Debug-iphoneos/kochgramm.app Payload/
           zip -r kochgramm.ipa Payload
 
       - name: Upload IPA
