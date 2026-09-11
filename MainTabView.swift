@@ -107,7 +107,3 @@ struct AIView: View {
         .preferredColorScheme(.dark)
     }
 }
-
-#Preview {
-    MainTabView()
-}
