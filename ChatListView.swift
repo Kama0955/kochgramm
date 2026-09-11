@@ -31,17 +31,17 @@ struct ChatListView: View {
                 
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        SectionHeader(title: "Закреплённые")
+                        ChatSectionHeader(title: "Закреплённые")
                         
                         ForEach(chats.prefix(2)) { chat in
-                            ChatRow(chat: chat)
+                            ChatRowView(chat: chat)
                             Divider().background(Theme.divider).padding(.leading, 76)
                         }
                         
-                        SectionHeader(title: "Все чаты")
+                        ChatSectionHeader(title: "Все чаты")
                         
                         ForEach(chats.dropFirst(2)) { chat in
-                            ChatRow(chat: chat)
+                            ChatRowView(chat: chat)
                             Divider().background(Theme.divider).padding(.leading, 76)
                         }
                     }
@@ -57,7 +57,7 @@ struct ChatListView: View {
     }
 }
 
-struct SectionHeader: View {
+struct ChatSectionHeader: View {
     let title: String
     var body: some View {
         HStack {
@@ -72,7 +72,7 @@ struct SectionHeader: View {
     }
 }
 
-struct ChatRow: View {
+struct ChatRowView: View {
     let chat: Chat
     
     var body: some View {
@@ -103,18 +103,17 @@ struct ChatRow: View {
                     Spacer()
                     Text(chat.time)
                         .font(.system(size: 13))
-                        .foregroundColor(chat.unread > 0 ? Theme.ac:cent : Theme.textSecondary)
+                        .foregroundColor(chat.unread > 0 ? Theme.accent : Theme.textSecondary)
                 }
                 
-                H Stack {
+                HStack {
                     Text(chat.lastMessage)
-                        .font4(.system(size: 14))
-                        .foreground)Color(Theme.textSecondary)
-                        .lineLimit( {
-1)
+                        .font(.system(size: 14))
+                        .foregroundColor(Theme.textSecondary)
+                        .lineLimit(1)
                     Spacer()
                     
-                    if chat.un                               read > 0 {
+                    if chat.unread > 0 {
                         Text("\(chat.unread)")
                             .font(.system(size: 12, weight: .bold))
                             .foregroundColor(.white)
