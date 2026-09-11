@@ -1,6 +1,6 @@
+
 import SwiftUI
 
-// ⚠️ ВСТАВЬ СВОИ КЛЮЧИ ЗДЕСЬ
 let kochApiId: Int32 = 31805867
 let kochApiHash: String = "API_HASH_PLACEHOLDER"
 
@@ -20,7 +20,6 @@ struct kochgrammApp: App {
     }
 }
 
-// MARK: - Модель страны
 struct Country: Identifiable {
     let id = UUID()
     let flag: String
@@ -84,7 +83,6 @@ let countries: [Country] = [
     Country(flag: "🇪🇪", name: "Эстония", code: "+372")
 ]
 
-// MARK: - Telegram Manager (упрощённая версия)
 class TelegramManager: ObservableObject {
     @Published var isLoggedIn = false
     @Published var isLoading = false
@@ -108,7 +106,6 @@ class TelegramManager: ObservableObject {
     }
 }
 
-// MARK: - Экран ввода телефона
 struct PhoneEntryView: View {
     @ObservedObject var telegram: TelegramManager
     @State private var phone = ""
@@ -157,17 +154,14 @@ struct PhoneEntryView: View {
                                 .font(.system(size: 14, weight: .semibold))
                                 .foregroundColor(.gray)
                         }
-                        .paddingCountry(.horizontal, 20)
-                        .padding(.)
-vertical, 14)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 14)
                     }
                     
-                           Divider().background(Color.white.opacity( }
-0.1))
+                    Divider().background(Color.white.opacity(0.1))
                     
-                    HStack(spacing   : 0) {
-                        Text(selectedCountry }
-.code)
+                    HStack(spacing: 0) {
+                        Text(selectedCountry.code)
                             .font(.system(size: 20))
                             .foregroundColor(.white)
                             .padding(.leading, 20)
@@ -211,16 +205,14 @@ vertical, 14)
                         .foregroundColor(.gray)
                         .padding(.bottom, 50)
                     
-                    HStack(spacing: 0) {
-                        TextField("", text: $code)
-                            .keyboardType(.numberPad)
-                            .focused($isCodeFocused)
-                            .font(.system(size: 24))
-                            .foregroundColor(.white)
-                            .multilineTextAlignment(.center)
-                            .padding(.vertical, 18)
-                    }
-                    .padding(.horizontal, 40)
+                    TextField("", text: $code)
+                        .keyboardType(.numberPad)
+                        .focused($isCodeFocused)
+                        .font(.system(size: 24))
+                        .foregroundColor(.white)
+                        .multilineTextAlignment(.center)
+                        .padding(.vertical, 18)
+                        .padding(.horizontal, 40)
                     
                     Divider().background(Color.white.opacity(0.1))
                         .padding(.horizontal, 40)
@@ -263,9 +255,11 @@ vertical, 14)
             }
         }
         .sheet(isPresented: $showCountryPicker) {
-            CountryPickerView(selected: $selected}
+            CountryPickerView(selected: $selectedCountry)
+        }
+    }
+}
 
-// MARK: - Выбор страны
 struct CountryPickerView: View {
     @Binding var selected: Country
     @Environment(\.dismiss) var dismiss
@@ -310,7 +304,6 @@ struct CountryPickerView: View {
     }
 }
 
-// MARK: - Главный экран
 struct MainView: View {
     @EnvironmentObject var telegram: TelegramManager
     @State private var selectedTab = 0
