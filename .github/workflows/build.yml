@@ -22,7 +22,6 @@ jobs:
           cp AppIcon.png kochgramm/
           
           mkdir -p kochgramm/Assets.xcassets/AppIcon.appiconset
-          
           sips -z 120 120 AppIcon.png --out kochgramm/Assets.xcassets/AppIcon.appiconset/icon-120.png
           sips -z 180 180 AppIcon.png --out kochgramm/Assets.xcassets/AppIcon.appiconset/icon-180.png
           sips -z 1024 1024 AppIcon.png --out kochgramm/Assets.xcassets/AppIcon.appiconset/icon-1024.png
@@ -49,6 +48,10 @@ jobs:
           options:
             deploymentTarget:
               iOS: "16.0"
+          packages:
+            TDLibKit:
+              url: https://github.com/Swiftgram/TDLibKit
+              from: 1.5.2
           targets:
             kochgramm:
               type: application
@@ -58,6 +61,8 @@ jobs:
                 - Assets.xcassets
               info:
                 path: Info.plist
+              dependencies:
+                - package: TDLibKit
               settings:
                 base:
                   PRODUCT_BUNDLE_IDENTIFIER: com.kochgramm.app
