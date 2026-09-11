@@ -1,3 +1,4 @@
+
 name: Build iOS IPA
 
 on:
@@ -18,18 +19,17 @@ jobs:
         run: |
           mkdir -p kochgramm
           cp kochgrammApp.swift kochgramm/
+          cp LoginView.swift kochgramm/
           cp Info.plist kochgramm/
           cp AppIcon.png kochgramm/
           
           # Создаём Assets.xcassets с иконкой
           mkdir -p kochgramm/Assets.xcassets/AppIcon.appiconset
           
-          # Генерируем иконки нужных размеров (iOS требует 120x120 и 1024x1024)
           sips -z 120 120 AppIcon.png --out kochgramm/Assets.xcassets/AppIcon.appiconset/icon-120.png
           sips -z 180 180 AppIcon.png --out kochgramm/Assets.xcassets/AppIcon.appiconset/icon-180.png
           sips -z 1024 1024 AppIcon.png --out kochgramm/Assets.xcassets/AppIcon.appiconset/icon-1024.png
           
-          # Создаём Contents.json для набора иконок
           cat > kochgramm/Assets.xcassets/AppIcon.appiconset/Contents.json << 'EOF'
           {
             "images" : [
@@ -41,14 +41,12 @@ jobs:
           }
           EOF
           
-          # Создаём корневой Contents.json для Assets.xcassets
           cat > kochgramm/Assets.xcassets/Contents.json << 'EOF'
           { "info" : { "version" : 1, "author" : "xcode" } }
           EOF
           
           cd kochgramm
           
-          # Главное изменение: Assets.xcassets добавлен в sources!
           cat > project.yml << 'EOF'
           name: kochgramm
           options:
@@ -60,6 +58,7 @@ jobs:
               platform: iOS
               sources:
                 - kochgrammApp.swift
+                - LoginView.swift
                 - Assets.xcassets
               info:
                 path: Info.plist
