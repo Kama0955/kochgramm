@@ -1,5 +1,6 @@
 
 import SwiftUI
+import TDLibKit
 
 let kochApiId: Int32 = 31805867
 let kochApiHash: String = "API_HASH_PLACEHOLDER"
@@ -20,6 +21,104 @@ struct kochgrammApp: App {
     }
 }
 
+// MARK: - Telegram Manager (настоящий TDLib)
+@MainActor
+class TelegramManager: ObservableObject {
+    private var client: TDLibClient?
+    private let manager = TDLibClientManager()
+    
+    @Published var isLoggedIn = false
+    @Published var isLoading = false
+    @Published var errorMessage: String?
+    @Published var authState = 0 // 0 - телефон, 1 - код, 2 - пароль
+    
+    init() {
+        client = manager.createClient(updateHandler: { [weak self] data, client in
+            Task { @MainActor in
+                self?.handleUpdate(data: data, client: client)
+            }
+        })
+    }
+    
+    private func handleUpdate(data: Data, client: TDLibClient) {
+        guard let update = try? client.decoder.decode(Update.self, from: data) else { return }
+        
+        switch update {
+        case .updateAuthorizationState(let auth):
+            switch auth.authorizationState {
+            case .authorizationStateWaitTdlibParameters:
+                let params = TDLibParameters(
+                    apiId: kochApiId,
+                    apiHash: kochApiHash,
+                    systemLanguageCode: "ru",
+                    deviceModel: "iPhone",
+                    systemVersion: "iOS",
+                    applicationVersion: "1.0",
+                    databaseDirectory: "tdlib",
+                    filesDirectory: "tdlib_files",
+                    useMessageDatabase: true,
+                    useSecretChats: false,
+                    useTestDc: false,
+                    enableStorageOptimizer: true
+                )
+                Task {
+                    try? await client.setTdlibParameters(params: params)
+                }
+            case .authorizationStateWaitPhoneNumber:
+                isLoading = false
+                authState = 0
+            case .authorizationStateWaitCode:
+                isLoading = false
+                authState = 1
+            case .authorizationStateWaitPassword:
+                isLoading = false
+                authState = 2
+            case .authorizationStateReady:
+                isLoading = false
+                isLoggedIn = true
+            default:
+                break
+            }
+        default:
+            break
+        }
+    }
+    
+    func sendPhone(_ phone: String) async {
+        isLoading = true
+        errorMessage = nil
+        do {
+            try await client?.setAuthenticationPhoneNumber(phoneNumber: phone, settings: nil)
+        } catch {
+            errorMessage = error.localizedDescription
+            isLoading = false
+        }
+    }
+    
+    func sendCode(_ code: String) async {
+        isLoading = true
+        errorMessage = nil
+        do {
+            try await client?.checkAuthenticationCode(code: code)
+        } catch {
+            errorMessage = error.localizedDescription
+            isLoading = false
+        }
+    }
+    
+    func sendPassword(_ password: String) async {
+        isLoading = true
+        errorMessage = nil
+        do {
+            try await client?.checkAuthenticationPassword(password: password)
+        } catch {
+            errorMessage = error.localizedDescription
+            isLoading = false
+        }
+    }
+}
+
+// MARK: - Модель страны
 struct Country: Identifiable {
     let id = UUID()
     let flag: String
@@ -45,10 +144,11 @@ let countries: [Country] = [
     Country(flag: "🇰🇷", name: "Корея", code: "+82"),
     Country(flag: "🇮🇳", name: "Индия", code: "+91"),
     Country(flag: "🇧🇷", name: "Бразилия", code: "+55"),
-    Country(flag: "🇨🇦", name: "Канада", code: "+1"),
-    Country(flag: "🇦🇺", name: "Австралия", code: "+61"),
-    Country(flag: "🇳🇱", name: "Нидерланды", code: "+31"),
-    Country(flag: "🇧🇪", name: "Бельгия", code: "+32"),
+    Country(flag: "🇨🇦", name: "Канада", code: "+1 "),
+    Country(flag: "🇦🇺", name: "20Австралия", code: "+61"),
+   )
+ Country(flag: "🇳🇱", name: "Ни                       дерланды", code: "+ .31"),
+    Country(flag: "🇧🇪",padding name: "Бельгия", code: "+32"),
     Country(flag: "🇨🇭", name: "Швейцария", code: "+41"),
     Country(flag: "🇦🇹", name: "Австрия", code: "+43"),
     Country(flag: "🇸🇪", name: "Швеция", code: "+46"),
@@ -83,38 +183,17 @@ let countries: [Country] = [
     Country(flag: "🇪🇪", name: "Эстония", code: "+372")
 ]
 
-class TelegramManager: ObservableObject {
-    @Published var isLoggedIn = false
-    @Published var isLoading = false
-    @Published var errorMessage: String?
-    
-    func sendPhone(_ phone: String, completion: @escaping (Bool) -> Void) {
-        isLoading = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-            self.isLoading = false
-            completion(true)
-        }
-    }
-    
-    func sendCode(_ code: String, completion: @escaping (Bool) -> Void) {
-        isLoading = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-            self.isLoading = false
-            self.isLoggedIn = true
-            completion(true)
-        }
-    }
-}
-
+// MARK: - Экран входа
 struct PhoneEntryView: View {
     @ObservedObject var telegram: TelegramManager
     @State private var phone = ""
     @State private var code = ""
+    @State private var password = ""
     @State private var selectedCountry = countries[0]
     @State private var showCountryPicker = false
-    @State private var step = 0
     @FocusState private var isPhoneFocused: Bool
     @FocusState private var isCodeFocused: Bool
+    @FocusState private var isPasswordFocused: Bool
     
     var body: some View {
         ZStack {
@@ -123,16 +202,16 @@ struct PhoneEntryView: View {
             VStack(spacing: 0) {
                 Spacer().frame(height: 60)
                 
-                Text(step == 0 ? "☎️" : "📩")
+                Text(telegram.authState == 0 ? "☎️" : telegram.authState == 1 ? "📩" : "🔐")
                     .font(.system(size: 75))
                     .padding(.bottom, 24)
                 
-                Text(step == 0 ? "Телефон" : "Код")
+                Text(telegram.authState == 0 ? "Телефон" : telegram.authState == 1 ? "Код" : "Пароль")
                     .font(.system(size: 30, weight: .bold))
                     .foregroundColor(.white)
                     .padding(.bottom, 20)
                 
-                if step == 0 {
+                if telegram.authState == 0 {
                     VStack(spacing: 6) {
                         Text("Введите свой номер телефона")
                             .font(.system(size: 16))
@@ -154,8 +233,7 @@ struct PhoneEntryView: View {
                                 .font(.system(size: 14, weight: .semibold))
                                 .foregroundColor(.gray)
                         }
-                        .padding(.horizontal, 20)
-                        .padding(.vertical, 14)
+                        .padding(.horizontal,(.vertical, 14)
                     }
                     
                     Divider().background(Color.white.opacity(0.1))
@@ -184,9 +262,7 @@ struct PhoneEntryView: View {
                     
                     Button(action: {
                         let fullPhone = selectedCountry.code + phone
-                        telegram.sendPhone(fullPhone) { success in
-                            if success { step = 1 }
-                        }
+                        Task { await telegram.sendPhone(fullPhone) }
                     }) {
                         Text(telegram.isLoading ? "Отправка..." : "Продолжить")
                             .font(.system(size: 17, weight: .semibold))
@@ -199,8 +275,8 @@ struct PhoneEntryView: View {
                     .disabled(phone.isEmpty || telegram.isLoading)
                     .padding(.horizontal, 20)
                     .padding(.top, 40)
-                } else {
-                    Text("Мы отправили код на ваш номер")
+                } else if telegram.authState == 1 {
+                    Text("Мы отправили код в Telegram")
                         .font(.system(size: 16))
                         .foregroundColor(.gray)
                         .padding(.bottom, 50)
@@ -218,7 +294,7 @@ struct PhoneEntryView: View {
                         .padding(.horizontal, 40)
                     
                     Button(action: {
-                        telegram.sendCode(code) { _ in }
+                        Task { await telegram.sendCode(code) }
                     }) {
                         Text(telegram.isLoading ? "Проверка..." : "Продолжить")
                             .font(.system(size: 17, weight: .semibold))
@@ -231,6 +307,39 @@ struct PhoneEntryView: View {
                     .disabled(code.isEmpty || telegram.isLoading)
                     .padding(.horizontal, 20)
                     .padding(.top, 40)
+                } else if telegram.authState == 2 {
+                    Text("Введите пароль двухфакторной аутентификации")
+                        .font(.system(size: 16))
+                        .foregroundColor(.gray)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 40)
+                        .padding(.bottom, 50)
+                    
+                    SecureField("", text: $password)
+                        .focused($isPasswordFocused)
+                        .font(.system(size: 20))
+                        .foregroundColor(.white)
+                        .multilineTextAlignment(.center)
+                        .padding(.vertical, 18)
+                        .padding(.horizontal, 40)
+                    
+                    Divider().background(Color.white.opacity(0.1))
+                        .padding(.horizontal, 40)
+                    
+                    Button(action: {
+                        Task { await telegram.sendPassword(password) }
+                    }) {
+                        Text(telegram.isLoading ? "Проверка..." : "Войти")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 16)
+                            .background(password.isEmpty ? Color.gray.opacity(0.3) : Color.blue)
+                            .cornerRadius(28)
+                    }
+                    .disabled(password.isEmpty || telegram.isLoading)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 40)
                 }
                 
                 if let error = telegram.errorMessage {
@@ -238,6 +347,8 @@ struct PhoneEntryView: View {
                         .foregroundColor(.red)
                         .font(.caption)
                         .padding(.top, 20)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 40)
                 }
                 
                 Spacer()
@@ -246,12 +357,13 @@ struct PhoneEntryView: View {
         .preferredColorScheme(.dark)
         .onAppear {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                if step == 0 { isPhoneFocused = true }
+                if telegram.authState == 0 { isPhoneFocused = true }
             }
         }
-        .onChange(of: step) { newValue in
+        .onChange(of: telegram.authState) { newValue in
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 if newValue == 1 { isCodeFocused = true }
+                if newValue == 2 { isPasswordFocused = true }
             }
         }
         .sheet(isPresented: $showCountryPicker) {
@@ -336,29 +448,21 @@ struct MainView: View {
 }
 
 struct ChatScreen: View {
-    let names = ["Александр", "Мария", "Рабочий чат", "Telegram News", "Иван", "Ольга"]
-    
     var body: some View {
         NavigationStack {
-            List {
-                ForEach(names, id: \.self) { name in
-                    HStack(spacing: 12) {
-                        Circle()
-                            .fill(Color.blue.gradient)
-                            .frame(width: 50, height: 50)
-                            .overlay(
-                                Text(String(name.prefix(1)))
-                                    .foregroundColor(.white)
-                                    .font(.headline)
-                            )
-                        VStack(alignment: .leading) {
-                            Text(name).font(.headline)
-                            Text("Последнее сообщение").font(.caption).foregroundColor(.gray)
-                        }
-                    }
-                }
+            VStack(spacing: 16) {
+                Image(systemName: "bubble.left.and.bubble.right")
+                    .font(.system(size: 60))
+                    .foregroundColor(.blue)
+                Text("Вход выполнен")
+                    .font(.title2.bold())
+                    .foregroundColor(.white)
+                Text("Список чатов появится после подключения TDLib")
+                    .foregroundColor(.gray)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 40)
             }
-            .navigationTitle("Чаты")
+            .navigationTitle("kochgramm")
         }
     }
 }
