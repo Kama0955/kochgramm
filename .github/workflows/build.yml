@@ -19,6 +19,46 @@ jobs:
           mkdir -p kochgramm
           cp kochgrammApp.swift kochgramm/
           cp Info.plist kochgramm/
+          
+          # Создаём Assets.xcassets с иконкой
+          mkdir -p kochgramm/Assets.xcassets/AppIcon.appiconset
+          
+          # Генерируем иконки нужных размеров через sips
+          sips -z 1024 1024 AppIcon.png --out kochgramm/Assets.xcassets/AppIcon.appiconset/icon-1024.png
+          sips -z 180 180 AppIcon.png --out kochgramm/Assets.xcassets/AppIcon.appiconset/icon-60@3x.png
+          sips -z 120 120 AppIcon.png --out kochgramm/Assets.xcassets/AppIcon.appiconset/icon-60@2x.png
+          sips -z 87 87 AppIcon.png --out kochgramm/Assets.xcassets/AppIcon.appiconset/icon-29@3x.png
+          sips -z 80 80 AppIcon.png --out kochgramm/Assets.xcassets/AppIcon.appiconset/icon-40@2x.png
+          sips -z 76 76 AppIcon.png --out kochgramm/Assets.xcassets/AppIcon.appiconset/icon-76.png
+          sips -z 58 58 AppIcon.png --out kochgramm/Assets.xcassets/AppIcon.appiconset/icon-29@2x.png
+          sips -z 40 40 AppIcon.png --out kochgramm/Assets.xcassets/AppIcon.appiconset/icon-40.png
+          sips -z 29 29 AppIcon.png --out kochgramm/Assets.xcassets/AppIcon.appiconset/icon-29.png
+          sips -z 20 20 AppIcon.png --out kochgramm/Assets.xcassets/AppIcon.appiconset/icon-20.png
+          
+          # Создаём Contents.json для AppIcon
+          cat > kochgramm/Assets.xcassets/AppIcon.appiconset/Contents.json << 'EOF'
+          {
+            "images" : [
+              { "size" : "20x20", "idiom" : "iphone", "filename" : "icon-20.png", "scale" : "2x" },
+              { "size" : "29x29", "idiom" : "iphone", "filename" : "icon-29.png", "scale" : "2x" },
+              { "size" : "29x29", "idiom" : "iphone", "filename" : "icon-29@2x.png", "scale" : "3x" },
+              { "size" : "40x40", "idiom" : "iphone", "filename" : "icon-40.png", "scale" : "2x" },
+              { "size" : "40x40", "idiom" : "iphone", "filename" : "icon-40@2x.png", "scale" : "3x" },
+              { "size" : "60x60", "idiom" : "iphone", "filename" : "icon-60@2x.png", "scale" : "2x" },
+              { "size" : "60x60", "idiom" : "iphone", "filename" : "icon-60@3x.png", "scale" : "3x" },
+              { "size" : "76x76", "idiom" : "ipad", "filename" : "icon-76.png", "scale" : "1x" },
+              { "size" : "1024x1024", "idiom" : "ios-marketing", "filename" : "icon-1024.png", "scale" : "1x" }
+            ],
+            "info" : { "version" : 1, "author" : "xcode" }
+          }
+          EOF
+          
+          # Создаём корневой Contents.json для Assets.xcassets
+          cat > kochgramm/Assets.xcassets/Contents.json << 'EOF'
+          { "info" : { "version" : 1, "author" : "xcode" } }
+          EOF
+          
+          # Создаём project.yml
           cd kochgramm
           cat > project.yml << 'EOF'
           name: kochgramm
@@ -29,7 +69,9 @@ jobs:
             kochgramm:
               type: application
               platform: iOS
-              sources: [kochgrammApp.swift]
+              sources:
+                - kochgrammApp.swift
+                - Assets.xcassets
               info:
                 path: Info.plist
               settings:
@@ -37,6 +79,7 @@ jobs:
                   PRODUCT_BUNDLE_IDENTIFIER: com.kochgramm.app
                   GENERATE_INFOPLIST_FILE: NO
                   INFOPLIST_FILE: Info.plist
+                  ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
                   SWIFT_VERSION: "5.0"
           EOF
 
