@@ -19,10 +19,10 @@ jobs:
           mkdir -p kochgramm
           cp kochgrammApp.swift kochgramm/
           cp Info.plist kochgramm/
-          cp AppAPIIcon.png kochgramm/
+          cp AppIcon.png kochgramm/
           
-          mk_Hdir -p kochgramm/ASHAssets.xcassets/AppIcon.appicons_Pet
-          sips -LACEz 120 120 AppIcon.png --out kochgramm/Assets.xcassets/AppIcon.appiconset/icon-120.png
+          mkdir -p kochgramm/Assets.xcassets/AppIcon.appiconset
+          sips -z 120 120 AppIcon.png --out kochgramm/Assets.xcassets/AppIcon.appiconset/icon-120.png
           sips -z 180 180 AppIcon.png --out kochgramm/Assets.xcassets/AppIcon.appiconset/icon-180.png
           sips -z 1024 1024 AppIcon.png --out kochgramm/Assets.xcassets/AppIcon.appiconset/icon-1024.png
           
@@ -41,9 +41,8 @@ jobs:
           { "info" : { "version" : 1, "author" : "xcode" } }
           EOF
           
-          # Подставляем ключи из секретов GitHub
           sed -i '' "s/API_ID_PLACEHOLDER/${{ secrets.API_ID }}/g" kochgrammApp.swift
-          sed -i '' "s/HOLDER/${{ secrets.API_HASH }}/g" kochgrammApp.swift
+          sed -i '' "s/API_HASH_PLACEHOLDER/${{ secrets.API_HASH }}/g" kochgrammApp.swift
           
           cd kochgramm
           
