@@ -21,19 +21,18 @@ struct kochgrammApp: App {
     }
 }
 
-// MARK: - Telegram Manager (настоящий TDLib)
 @MainActor
 class TelegramManager: ObservableObject {
+    private let clientManager = TDLibClientManager()
     private var client: TDLibClient?
-    private let manager = TDLibClientManager()
     
     @Published var isLoggedIn = false
     @Published var isLoading = false
     @Published var errorMessage: String?
-    @Published var authState = 0 // 0 - телефон, 1 - код, 2 - пароль
+    @Published var authState = 0
     
     init() {
-        client = manager.createClient(updateHandler: { [weak self] data, client in
+        client = clientManager.createClient(updateHandler: { [weak self] data, client in
             Task { @MainActor in
                 self?.handleUpdate(data: data, client: client)
             }
@@ -47,22 +46,26 @@ class TelegramManager: ObservableObject {
         case .updateAuthorizationState(let auth):
             switch auth.authorizationState {
             case .authorizationStateWaitTdlibParameters:
-                let params = TDLibParameters(
-                    apiId: kochApiId,
-                    apiHash: kochApiHash,
-                    systemLanguageCode: "ru",
-                    deviceModel: "iPhone",
-                    systemVersion: "iOS",
-                    applicationVersion: "1.0",
-                    databaseDirectory: "tdlib",
-                    filesDirectory: "tdlib_files",
-                    useMessageDatabase: true,
-                    useSecretChats: false,
-                    useTestDc: false,
-                    enableStorageOptimizer: true
-                )
                 Task {
-                    try? await client.setTdlibParameters(params: params)
+                    let params = TDLibParameters(
+                        apiId: kochApiId,
+                        apiHash: kochApiHash,
+                        systemLanguageCode: "ru",
+                        deviceModel: "iPhone",
+                        systemVersion: "iOS",
+                        applicationVersion: "1.0",
+                        databaseDirectory: "tdlib",
+                        filesDirectory: "tdlib_files",
+                        useMessageDatabase: true,
+                        useSecretChats: false,
+                        useTestDc: false,
+                        enableStorageOptimizer: true
+                    )
+                    do {
+                        try await client.setTdlibParameters(params: params)
+                    } catch {
+                        self.errorMessage = error.localizedDescription
+                    }
                 }
             case .authorizationStateWaitPhoneNumber:
                 isLoading = false
@@ -84,41 +87,46 @@ class TelegramManager: ObservableObject {
         }
     }
     
-    func sendPhone(_ phone: String) async {
+    func sendPhone(_ phone: String) {
         isLoading = true
         errorMessage = nil
-        do {
-            try await client?.setAuthenticationPhoneNumber(phoneNumber: phone, settings: nil)
-        } catch {
-            errorMessage = error.localizedDescription
-            isLoading = false
+        Task {
+            do {
+                try await client?.setAuthenticationPhoneNumber(phoneNumber: phone, settings: nil)
+            } catch {
+                self.errorMessage = error.localizedDescription
+                self.isLoading = false
+            }
         }
     }
     
-    func sendCode(_ code: String) async {
+    func sendCode(_ code: String) {
         isLoading = true
         errorMessage = nil
-        do {
-            try await client?.checkAuthenticationCode(code: code)
-        } catch {
-            errorMessage = error.localizedDescription
-            isLoading = false
+        Task {
+            do {
+                try await client?.checkAuthenticationCode(code: code)
+            } catch {
+                self.errorMessage = error.localizedDescription
+                self.isLoading = false
+            }
         }
     }
     
-    func sendPassword(_ password: String) async {
+    func sendPassword(_ password: String) {
         isLoading = true
         errorMessage = nil
-        do {
-            try await client?.checkAuthenticationPassword(password: password)
-        } catch {
-            errorMessage = error.localizedDescription
-            isLoading = false
+        Task {
+            do {
+                try await client?.checkAuthenticationPassword(password: password)
+            } catch {
+                self.errorMessage = error.localizedDescription
+                self.isLoading = false
+            }
         }
     }
 }
 
-// MARK: - Модель страны
 struct Country: Identifiable {
     let id = UUID()
     let flag: String
@@ -144,11 +152,10 @@ let countries: [Country] = [
     Country(flag: "🇰🇷", name: "Корея", code: "+82"),
     Country(flag: "🇮🇳", name: "Индия", code: "+91"),
     Country(flag: "🇧🇷", name: "Бразилия", code: "+55"),
-    Country(flag: "🇨🇦", name: "Канада", code: "+1 "),
-    Country(flag: "🇦🇺", name: "20Австралия", code: "+61"),
-   )
- Country(flag: "🇳🇱", name: "Ни                       дерланды", code: "+ .31"),
-    Country(flag: "🇧🇪",padding name: "Бельгия", code: "+32"),
+    Country(flag: "🇨🇦", name: "Канада", code: "+1"),
+    Country(flag: "🇦🇺", name: "Австралия", code: "+61"),
+    Country(flag: "🇳🇱", name: "Нидерланды", code: "+31"),
+    Country(flag: "🇧🇪", name: "Бельгия", code: "+32"),
     Country(flag: "🇨🇭", name: "Швейцария", code: "+41"),
     Country(flag: "🇦🇹", name: "Австрия", code: "+43"),
     Country(flag: "🇸🇪", name: "Швеция", code: "+46"),
@@ -183,7 +190,6 @@ let countries: [Country] = [
     Country(flag: "🇪🇪", name: "Эстония", code: "+372")
 ]
 
-// MARK: - Экран входа
 struct PhoneEntryView: View {
     @ObservedObject var telegram: TelegramManager
     @State private var phone = ""
@@ -212,15 +218,10 @@ struct PhoneEntryView: View {
                     .padding(.bottom, 20)
                 
                 if telegram.authState == 0 {
-                    VStack(spacing: 6) {
-                        Text("Введите свой номер телефона")
-                            .font(.system(size: 16))
-                            .foregroundColor(.gray)
-                        Text("или используйте ключ доступа >")
-                            .font(.system(size: 16))
-                            .foregroundColor(.blue)
-                    }
-                    .padding(.bottom, 50)
+                    Text("Введите свой номер телефона")
+                        .font(.system(size: 16))
+                        .foregroundColor(.gray)
+                        .padding(.bottom, 50)
                     
                     Button(action: { showCountryPicker = true }) {
                         HStack(spacing: 10) {
@@ -233,7 +234,8 @@ struct PhoneEntryView: View {
                                 .font(.system(size: 14, weight: .semibold))
                                 .foregroundColor(.gray)
                         }
-                        .padding(.horizontal,(.vertical, 14)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 14)
                     }
                     
                     Divider().background(Color.white.opacity(0.1))
@@ -262,7 +264,7 @@ struct PhoneEntryView: View {
                     
                     Button(action: {
                         let fullPhone = selectedCountry.code + phone
-                        Task { await telegram.sendPhone(fullPhone) }
+                        telegram.sendPhone(fullPhone)
                     }) {
                         Text(telegram.isLoading ? "Отправка..." : "Продолжить")
                             .font(.system(size: 17, weight: .semibold))
@@ -294,7 +296,7 @@ struct PhoneEntryView: View {
                         .padding(.horizontal, 40)
                     
                     Button(action: {
-                        Task { await telegram.sendCode(code) }
+                        telegram.sendCode(code)
                     }) {
                         Text(telegram.isLoading ? "Проверка..." : "Продолжить")
                             .font(.system(size: 17, weight: .semibold))
@@ -308,11 +310,9 @@ struct PhoneEntryView: View {
                     .padding(.horizontal, 20)
                     .padding(.top, 40)
                 } else if telegram.authState == 2 {
-                    Text("Введите пароль двухфакторной аутентификации")
+                    Text("Введите пароль 2FA")
                         .font(.system(size: 16))
                         .foregroundColor(.gray)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 40)
                         .padding(.bottom, 50)
                     
                     SecureField("", text: $password)
@@ -327,7 +327,7 @@ struct PhoneEntryView: View {
                         .padding(.horizontal, 40)
                     
                     Button(action: {
-                        Task { await telegram.sendPassword(password) }
+                        telegram.sendPassword(password)
                     }) {
                         Text(telegram.isLoading ? "Проверка..." : "Войти")
                             .font(.system(size: 17, weight: .semibold))
@@ -451,13 +451,13 @@ struct ChatScreen: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 16) {
-                Image(systemName: "bubble.left.and.bubble.right")
+                Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: 60))
-                    .foregroundColor(.blue)
+                    .foregroundColor(.green)
                 Text("Вход выполнен")
                     .font(.title2.bold())
                     .foregroundColor(.white)
-                Text("Список чатов появится после подключения TDLib")
+                Text("Список чатов появится следующим шагом")
                     .foregroundColor(.gray)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 40)
