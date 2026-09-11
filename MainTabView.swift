@@ -11,25 +11,25 @@ struct MainTabView: View {
                 }
                 .tag(0)
             
-            ContactsPlaceholderView()
+            PlaceholderTabView(title: "Контакты", icon: "person.2.fill", subtitle: "Скоро здесь появятся ваши контакты")
                 .tabItem {
                     Label("Контакты", systemImage: "person.2.fill")
                 }
                 .tag(1)
             
-            CallsPlaceholderView()
+            PlaceholderTabView(title: "Звонки", icon: "phone.fill", subtitle: "История звонков появится здесь")
                 .tabItem {
                     Label("Звонки", systemImage: "phone.fill")
                 }
                 .tag(2)
             
-            AIView()
+            PlaceholderTabView(title: "NEXORA AI", icon: "sparkles", subtitle: "Умный помощник скоро будет здесь")
                 .tabItem {
                     Label("AI", systemImage: "sparkles")
                 }
                 .tag(3)
             
-            SettingsView()
+            PlaceholderTabView(title: "Настройки", icon: "gearshape.fill", subtitle: "Раздел настроек в разработке")
                 .tabItem {
                     Label("Настройки", systemImage: "gearshape.fill")
                 }
@@ -39,69 +39,29 @@ struct MainTabView: View {
     }
 }
 
-struct ContactsPlaceholderView: View {
+struct PlaceholderTabView: View {
+    let title: String
+    let icon: String
+    let subtitle: String
+    
     var body: some View {
         NavigationStack {
             ZStack {
                 Theme.background.ignoresSafeArea()
                 VStack(spacing: 16) {
-                    Image(systemName: "person.2.fill")
-                        .font(.system(size: 60))
-                        .foregroundColor(Theme.textSecondary)
-                    Text("Контакты")
-                        .font(.title2.bold())
-                        .foregroundColor(.white)
-                    Text("Скоро здесь появятся ваши контакты")
-                        .foregroundColor(Theme.textSecondary)
-                }
-            }
-            .navigationTitle("Контакты")
-            .toolbarColorScheme(.dark, for: .navigationBar)
-        }
-        .preferredColorScheme(.dark)
-    }
-}
-
-struct CallsPlaceholderView: View {
-    var body: some View {
-        NavigationStack {
-            ZStack {
-                Theme.background.ignoresSafeArea()
-                VStack(spacing: 16) {
-                    Image(systemName: "phone.fill")
-                        .font(.system(size: 60))
-                        .foregroundColor(Theme.textSecondary)
-                    Text("Звонки")
-                        .font(.title2.bold())
-                        .foregroundColor(.white)
-                    Text("История звонков появится здесь")
-                        .foregroundColor(Theme.textSecondary)
-                }
-            }
-            .navigationTitle("Звонки")
-            .toolbarColorScheme(.dark, for: .navigationBar)
-        }
-        .preferredColorScheme(.dark)
-    }
-}
-
-struct AIView: View {
-    var body: some View {
-        NavigationStack {
-            ZStack {
-                Theme.background.ignoresSafeArea()
-                VStack(spacing: 16) {
-                    Image(systemName: "sparkles")
+                    Image(systemName: icon)
                         .font(.system(size: 60))
                         .foregroundColor(Theme.accent)
-                    Text("NEXORA AI")
+                    Text(title)
                         .font(.title2.bold())
                         .foregroundColor(.white)
-                    Text("Умный помощник скоро будет здесь")
+                    Text(subtitle)
                         .foregroundColor(Theme.textSecondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 40)
                 }
             }
-            .navigationTitle("AI")
+            .navigationTitle(title)
             .toolbarColorScheme(.dark, for: .navigationBar)
         }
         .preferredColorScheme(.dark)
