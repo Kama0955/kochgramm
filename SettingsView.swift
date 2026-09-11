@@ -8,7 +8,6 @@ struct SettingsView: View {
                 
                 ScrollView {
                     VStack(spacing: 12) {
-                        // Профиль
                         HStack(spacing: 14) {
                             Circle()
                                 .fill(Theme.accentGradient)
@@ -18,8 +17,7 @@ struct SettingsView: View {
                                         .font(.system(size: 26, weight: .bold))
                                         .foregroundColor(.white)
                                 )
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("Ваш профиль")
+                            VStack(alignment: .leading, spacing Text("Ваш профиль")
                                     .font(.system(size: 18, weight: .semibold))
                                     .foregroundColor(.white)
                                 Text("+49 000 000 00 00")
@@ -35,7 +33,6 @@ struct SettingsView: View {
                         .cornerRadius(Theme.cornerMedium)
                         .padding(.horizontal, 16)
                         
-                        // Разделы
                         SettingsSection(title: "Основные", items: [
                             SettingsItem(icon: "paintbrush.fill", color: .purple, title: "Внешний вид"),
                             SettingsItem(icon: "bell.fill", color: .red, title: "Уведомления"),
@@ -125,8 +122,4 @@ struct SettingsSection: View {
             .padding(.horizontal, 16)
         }
     }
-}
-
-#Preview {
-    SettingsView()
 }
