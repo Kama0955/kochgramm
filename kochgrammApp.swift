@@ -9,136 +9,248 @@ struct kochgrammApp: App {
             if isLoggedIn {
                 MainView()
             } else {
-                LoginView(isLoggedIn: $isLoggedIn)
+                PhoneEntryView(isLoggedIn: $isLoggedIn)
             }
         }
     }
 }
 
-struct LoginView: View {
+// MARK: - Модель страны
+struct Country: Identifiable {
+    let id = UUID()
+    let flag: String
+    let name: String
+    let code: String
+}
+
+// MARK: - Список стран (основные)
+let countries: [Country] = [
+    Country(flag: "🇩🇪", name: "Германия", code: "+49"),
+    Country(flag: "🇷🇺", name: "Россия", code: "+7"),
+    Country(flag: "🇺🇦", name: "Украина", code: "+380"),
+    Country(flag: "🇧🇾", name: "Беларусь", code: "+375"),
+    Country(flag: "🇰🇿", name: "Казахстан", code: "+7"),
+    Country(flag: "🇺🇸", name: "США", code: "+1"),
+    Country(flag: "🇬🇧", name: "Великобритания", code: "+44"),
+    Country(flag: "🇫🇷", name: "Франция", code: "+33"),
+    Country(flag: "🇮🇹", name: "Италия", code: "+39"),
+    Country(flag: "🇪🇸", name: "Испания", code: "+34"),
+    Country(flag: "🇵🇱", name: "Польша", code: "+48"),
+    Country(flag: "🇹🇷", name: "Турция", code: "+90"),
+    Country(flag: "🇨🇳", name: "Китай", code: "+86"),
+    Country(flag: "🇯🇵", name: "Япония", code: "+81"),
+    Country(flag: "🇰🇷", name: "Корея", code: "+82"),
+    Country(flag: "🇮🇳", name: "Индия", code: "+91"),
+    Country(flag: "🇧🇷", name: "Бразилия", code: "+55"),
+    Country(flag: "🇨🇦", name: "Канада", code: "+1"),
+    Country(flag: "🇦🇺", name: "Австралия", code: "+61"),
+    Country(flag: "🇳🇱", name: "Нидерланды", code: "+31"),
+    Country(flag: "🇧🇪", name: "Бельгия", code: "+32"),
+    Country(flag: "🇨🇭", name: "Швейцария", code: "+41"),
+    Country(flag: "🇦🇹", name: "Австрия", code: "+43"),
+    Country(flag: "🇸🇪", name: "Швеция", code: "+46"),
+    Country(flag: "🇳🇴", name: "Норвегия", code: "+47"),
+    Country(flag: "🇩🇰", name: "Дания", code: "+45"),
+    Country(flag: "🇫🇮", name: "Финляндия", code: "+358"),
+    Country(flag: "🇵🇹", name: "Португалия", code: "+351"),
+    Country(flag: "🇬🇷", name: "Греция", code: "+30"),
+    Country(flag: "🇨🇿", name: "Чехия", code: "+420"),
+    Country(flag: "🇷🇴", name: "Румыния", code: "+40"),
+    Country(flag: "🇭🇺", name: "Венгрия", code: "+36"),
+    Country(flag: "🇧🇬", name: "Болгария", code: "+359"),
+    Country(flag: "🇷🇸", name: "Сербия", code: "+381"),
+    Country(flag: "🇭🇷", name: "Хорватия", code: "+385"),
+    Country(flag: "🇮🇱", name: "Израиль", code: "+972"),
+    Country(flag: "🇦🇪", name: "ОАЭ", code: "+971"),
+    Country(flag: "🇸🇦", name: "Саудовская Аравия", code: "+966"),
+    Country(flag: "🇪🇬", name: "Египет", code: "+20"),
+    Country(flag: "🇿🇦", name: "ЮАР", code: "+27"),
+    Country(flag: "🇦🇷", name: "Аргентина", code: "+54"),
+    Country(flag: "🇲🇽", name: "Мексика", code: "+52"),
+    Country(flag: "🇲🇩", name: "Молдова", code: "+373"),
+    Country(flag: "🇬🇪", name: "Грузия", code: "+995"),
+    Country(flag: "🇦🇲", name: "Армения", code: "+374"),
+    Country(flag: "🇦🇿", name: "Азербайджан", code: "+994"),
+    Country(flag: "🇺🇿", name: "Узбекистан", code: "+998"),
+    Country(flag: "🇰🇬", name: "Киргизия", code: "+996"),
+    Country(flag: "🇹🇯", name: "Таджикистан", code: "+992"),
+    Country(flag: "🇹🇲", name: "Туркменистан", code: "+993"),
+    Country(flag: "🇱🇹", name: "Литва", code: "+370"),
+    Country(flag: "🇱🇻", name: "Латвия", code: "+371"),
+    Country(flag: "🇪🇪", name: "Эстония", code: "+372")
+]
+
+// MARK: - Экран ввода телефона
+struct PhoneEntryView: View {
     @Binding var isLoggedIn: Bool
     @State private var phone = ""
-    @State private var logoScale: CGFloat = 0.3
-    @State private var logoOpacity: Double = 0
-    @State private var contentOffset: CGFloat = 40
-    @State private var contentOpacity: Double = 0
+    @State private var selectedCountry = countries[0]
+    @State private var showCountryPicker = false
+    @State private var showConfirm = false
     
     var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-            
-            Circle()
-                .fill(Color.blue.opacity(0.25))
-                .frame(width: 500, height: 500)
-                .blur(radius: 120)
-                .offset(y: -280)
-            
-            VStack(spacing: 0) {
-                Spacer()
+        NavigationStack {
+            ZStack {
+                Color.black.ignoresSafeArea()
                 
-                VStack(spacing: 20) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 32)
-                            .fill(
-                                LinearGradient(
-                                    colors: [Color.blue, Color.purple],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
-                            )
-                            .frame(width: 140, height: 140)
-                            .blur(radius: 30)
-                            .opacity(0.7)
+                ScrollView {
+                    VStack(spacing: 0) {
+                        Spacer().frame(height: 40)
                         
-                        Image(systemName: "bubble.left.and.bubble.right.fill")
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .frame(width: 80, height: 80)
+                        // Телефончик
+                        Text("☎️")
+                            .font(.system(size: 70))
+                            .padding(.bottom, 20)
+                        
+                        // Заголовок
+                        Text("Телефон")
+                            .font(.system(size: 28, weight: .bold))
                             .foregroundColor(.white)
-                    }
-                    .scaleEffect(logoScale)
-                    .opacity(logoOpacity)
-                    
-                    VStack(spacing: 6) {
-                        Text("kochgramm")
-                            .font(.system(size: 36, weight: .bold))
-                            .foregroundColor(.white)
+                            .padding(.bottom, 16)
                         
-                        Text("Premium Messenger")
-                            .font(.system(size: 14))
-                            .foregroundColor(Color.gray)
-                    }
-                }
-                
-                Spacer()
-                
-                VStack(spacing: 16) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Введите номер телефона")
-                            .font(.system(size: 13))
-                            .foregroundColor(Color.gray)
-                            .padding(.leading, 4)
-                        
-                        HStack(spacing: 12) {
-                            Text("+")
-                                .foregroundColor(.white)
-                                .font(.system(size: 18, weight: .medium))
+                        // Подсказка
+                        VStack(spacing: 4) {
+                            Text("Введите свой номер телефона")
+                                .font(.system(size: 15))
+                                .foregroundColor(.gray)
                             
-                            TextField("", text: $phone)
-                                .keyboardType(.phonePad)
+                            Text("или используйте ключ доступа >")
+                                .font(.system(size: 15))
+                                .foregroundColor(.blue)
+                        }
+                        .padding(.bottom, 40)
+                        
+                        // Выбор страны
+                        Button(action: {
+                            showCountryPicker = true
+                        }) {
+                            HStack {
+                                Text(selectedCountry.flag)
+                                    .font(.system(size: 22))
+                                Text(selectedCountry.name)
+                                    .font(.system(size: 17))
+                                    .foregroundColor(.blue)
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 14))
+                                    .foregroundColor(.gray)
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 14)
+                        }
+                        
+                        Divider().background(Color.white.opacity(0.1))
+                        
+                        // Поле ввода номера
+                        HStack(spacing: 12) {
+                            Text(selectedCountry.code)
+                                .font(.system(size: 20))
                                 .foregroundColor(.white)
-                                .font(.system(size: 18))
+                                .frame(minWidth: 50, alignment: .leading)
+                            
+                            Rectangle()
+                                .fill(Color.white.opacity(0.2))
+                                .frame(width: 1, height: 24)
+                            
+                            TextField("Номер телефона", text: $phone)
+                                .keyboardType(.phonePad)
+                                .font(.system(size: 20))
+                                .foregroundColor(.white)
                         }
-                        .padding(18)
-                        .background(Color.white.opacity(0.06))
-                        .cornerRadius(16)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 16)
-                                .stroke(Color.white.opacity(0.12), lineWidth: 1)
-                        )
-                    }
-                    
-                    Button(action: {
-                        withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
-                            isLoggedIn = true
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 16)
+                        
+                        Divider().background(Color.white.opacity(0.1))
+                        
+                        // Кнопка Продолжить
+                        Button(action: {
+                            showConfirm = true
+                        }) {
+                            Text("Продолжить")
+                                .font(.system(size: 17, weight: .semibold))
+                                .foregroundColor(.white)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 16)
+                                .background(phone.isEmpty ? Color.gray.opacity(0.3) : Color.blue)
+                                .cornerRadius(12)
                         }
-                    }) {
-                        Text("Продолжить")
-                            .font(.system(size: 17, weight: .semibold))
-                            .foregroundColor(.white)
-                            .frame(maxWidth: .infinity)
-                            .padding(18)
-                            .background(
-                                LinearGradient(
-                                    colors: [Color.blue, Color.purple],
-                                    startPoint: .leading,
-                                    endPoint: .trailing
-                                )
-                            )
-                            .cornerRadius(16)
+                        .disabled(phone.isEmpty)
+                        .padding(.horizontal, 16)
+                        .padding(.top, 30)
+                        
+                        Spacer()
                     }
                 }
-                .padding(.horizontal, 24)
-                .padding(.bottom, 60)
-                .offset(y: contentOffset)
-                .opacity(contentOpacity)
             }
-            .ignoresSafeArea(.keyboard)
+            .navigationBarHidden(true)
+            .sheet(isPresented: $showCountryPicker) {
+                CountryPickerView(selected: $selectedCountry)
+            }
+            .alert("Правильно ли указан номер?", isPresented: $showConfirm) {
+                Button("Изменить", role: .cancel) { }
+                Button("Продолжить") {
+                    withAnimation {
+                        isLoggedIn = true
+                    }
+                }
+            } message: {
+                Text("\(selectedCountry.code) \(phone)")
+            }
         }
         .preferredColorScheme(.dark)
-        .onAppear {
-            withAnimation(.spring(response: 0.9, dampingFraction: 0.6)) {
-                logoScale = 1.0
-                logoOpacity = 1.0
+    }
+}
+
+// MARK: - Выбор страны
+struct CountryPickerView: View {
+    @Binding var selected: Country
+    @Environment(\.dismiss) var dismiss
+    @State private var search = ""
+    
+    var filtered: [Country] {
+        if search.isEmpty { return countries }
+        return countries.filter { $0.name.lowercased().contains(search.lowercased()) }
+    }
+    
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(filtered) { country in
+                    Button(action: {
+                        selected = country
+                        dismiss()
+                    }) {
+                        HStack {
+                            Text(country.flag)
+                                .font(.system(size: 22))
+                            Text(country.name)
+                                .foregroundColor(.white)
+                            Spacer()
+                            Text(country.code)
+                                .foregroundColor(.gray)
+                            if country.id == selected.id {
+                                Image(systemName: "checkmark")
+                                    .foregroundColor(.blue)
+                            }
+                        }
+                    }
+                }
             }
-            withAnimation(.easeOut(duration: 0.7).delay(0.4)) {
-                contentOffset = 0
-                contentOpacity = 1
+            .searchable(text: $search, prompt: "Поиск страны")
+            .navigationTitle("Страна")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarColorScheme(.dark, for: .navigationBar)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Отмена") { dismiss() }
+                }
             }
+            .preferredColorScheme(.dark)
         }
     }
 }
 
+// MARK: - Главный экран
 struct MainView: View {
     @State private var selectedTab = 0
     
