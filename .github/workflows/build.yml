@@ -17,8 +17,7 @@ jobs:
       - name: Prepare Project Structure
         run: |
           mkdir -p kochgramm
-          cp kochgrammApp.swift kochgramm/
-          cp ContentView.swift kochgramm/
+          cp *.swift kochgramm/
           cp Info.plist kochgramm/
           
           cat > kochgramm/project.yml << 'EOF'
