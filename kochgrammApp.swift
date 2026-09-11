@@ -33,7 +33,7 @@ struct LoginView: View {
                 .blur(radius: 120)
                 .offset(y: -280)
             
-            VStack(spacing: 32) {
+            VStack(spacing: 0) {
                 Spacer()
                 
                 VStack(spacing: 20) {
@@ -119,10 +119,11 @@ struct LoginView: View {
                     }
                 }
                 .padding(.horizontal, 24)
-                .padding(.bottom, 40)
+                .padding(.bottom, 60)
                 .offset(y: contentOffset)
                 .opacity(contentOpacity)
             }
+            .ignoresSafeArea(.keyboard)
         }
         .preferredColorScheme(.dark)
         .onAppear {
