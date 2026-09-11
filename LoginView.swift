@@ -34,7 +34,7 @@ struct LoginView: View {
                         RoundedRectangle(cornerRadius: 32)
                             .fill(
                                 LinearGradient(
-                                    colors: [.blue, .purple],
+                                    colors: [Color.blue, Color.purple],
                                     startPoint: .topLeading,
                                     endPoint: .bottomTrailing
                                 )
@@ -43,11 +43,11 @@ struct LoginView: View {
                             .blur(radius: 30)
                             .opacity(0.7)
                         
-                        Image("AppIcon")
+                        Image(systemName: "bubble.left.and.bubble.right.fill")
                             .resizable()
                             .aspectRatio(contentMode: .fit)
-                            .frame(width: 110, height: 110)
-                            .clipShape(RoundedRectangle(cornerRadius: 28))
+                            .frame(width: 80, height: 80)
+                            .foregroundColor(.white)
                     }
                     .scaleEffect(logoScale)
                     .opacity(logoOpacity)
@@ -59,7 +59,7 @@ struct LoginView: View {
                         
                         Text("Premium Messenger")
                             .font(.system(size: 14))
-                            .foregroundColor(.gray)
+                            .foregroundColor(Color.gray)
                     }
                 }
                 
@@ -70,7 +70,7 @@ struct LoginView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Введите номер телефона")
                             .font(.system(size: 13))
-                            .foregroundColor(.gray)
+                            .foregroundColor(Color.gray)
                             .padding(.leading, 4)
                         
                         HStack(spacing: 12) {
@@ -82,7 +82,7 @@ struct LoginView: View {
                                 .keyboardType(.phonePad)
                                 .foregroundColor(.white)
                                 .font(.system(size: 18))
-                                .accentColor(.blue)
+                                .accentColor(Color.blue)
                         }
                         .padding(18)
                         .background(Color.white.opacity(0.06))
@@ -105,7 +105,7 @@ struct LoginView: View {
                             .padding(18)
                             .background(
                                 LinearGradient(
-                                    colors: [.blue, .purple],
+                                    colors: [Color.blue, Color.purple],
                                     startPoint: .leading,
                                     endPoint: .trailing
                                 )
@@ -115,7 +115,7 @@ struct LoginView: View {
                     
                     Text("Продолжая, вы соглашаетесь с условиями использования")
                         .font(.system(size: 11))
-                        .foregroundColor(.gray.opacity(0.7))
+                        .foregroundColor(Color.gray.opacity(0.7))
                         .multilineTextAlignment(.center)
                         .padding(.top, 4)
                 }
@@ -127,12 +127,10 @@ struct LoginView: View {
         }
         .preferredColorScheme(.dark)
         .onAppear {
-            // Анимация логотипа
             withAnimation(.spring(response: 0.9, dampingFraction: 0.6)) {
                 logoScale = 1.0
                 logoOpacity = 1.0
             }
-            // Анимация формы
             withAnimation(.easeOut(duration: 0.7).delay(0.4)) {
                 contentOffset = 0
                 contentOpacity = 1
