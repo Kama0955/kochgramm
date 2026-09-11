@@ -30,7 +30,11 @@ jobs:
             kochgramm:
               type: application
               platform: iOS
-              sources: [.]
+              sources:
+                - path: .
+                  excludes:
+                    - "project.yml"
+                    - "build"
               info:
                 path: Info.plist
               settings:
