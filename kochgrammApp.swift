@@ -2,17 +2,30 @@ import SwiftUI
 
 @main
 struct kochgrammApp: App {
-    @State private var isLoggedIn = false
+    @State private var screen: AppScreen = .welcome
     
     var body: some Scene {
         WindowGroup {
-            if isLoggedIn {
+            switch screen {
+            case .welcome:
+                WelcomeView(onContinue: {
+                    withAnimation { screen = .phone }
+                })
+            case .phone:
+                PhoneEntryView(onLogin: {
+                    withAnimation { screen = .chats }
+                })
+            case .chats:
                 MainView()
-            } else {
-                PhoneEntryView(isLoggedIn: $isLoggedIn)
             }
         }
     }
+}
+
+enum AppScreen {
+    case welcome
+    case phone
+    case chats
 }
 
 // MARK: - Модель страны
@@ -23,7 +36,6 @@ struct Country: Identifiable {
     let code: String
 }
 
-// MARK: - Список стран (основные)
 let countries: [Country] = [
     Country(flag: "🇩🇪", name: "Германия", code: "+49"),
     Country(flag: "🇷🇺", name: "Россия", code: "+7"),
@@ -80,9 +92,98 @@ let countries: [Country] = [
     Country(flag: "🇪🇪", name: "Эстония", code: "+372")
 ]
 
-// MARK: - Экран ввода телефона
+// MARK: - Welcome Screen (первый экран)
+struct WelcomeView: View {
+    let onContinue: () -> Void
+    @State private var appeared = false
+    
+    var body: some View {
+        ZStack {
+            // Фон — картинка или градиент
+            LinearGradient(
+                colors: [
+                    Color(red: 0.05, green: 0.05, blue: 0.10),
+                    Color(red: 0.10, green: 0.08, blue: 0.20),
+                    Color.black
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
+            
+            // Свечение за логотипом
+            Circle()
+                .fill(Color.blue.opacity(0.3))
+                .frame(width: 400, height: 400)
+                .blur(radius: 120)
+                .offset(y: -100)
+                .opacity(appeared ? 1 : 0)
+            
+            VStack(spacing: 0) {
+                Spacer()
+                
+                // Логотип — твоя иконка
+                Image(systemName: "bubble.left.and.bubble.right.fill")
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 150, height: 150)
+                    .foregroundColor(.white)
+                    .shadow(color: .blue.opacity(0.5), radius: 30)
+                    .scaleEffect(appeared ? 1 : 0.5)
+                    .opacity(appeared ? 1 : 0)
+                
+                // Название
+                Text("kochgramm")
+                    .font(.system(size: 42, weight: .bold))
+                    .foregroundColor(.white)
+                    .padding(.top, 40)
+                    .opacity(appeared ? 1 : 0)
+                
+                // Подпись
+                Text("The world's fastest messaging app.\nIt is free and secure.")
+                    .font(.system(size: 16))
+                    .foregroundColor(.white.opacity(0.9))
+                    .multilineTextAlignment(.center)
+                    .padding(.top, 16)
+                    .padding(.horizontal, 40)
+                    .opacity(appeared ? 1 : 0)
+                
+                Spacer()
+                
+                // Кнопка
+                Button(action: onContinue) {
+                    Text("Start Messaging")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 18)
+                        .background(Color.blue)
+                        .cornerRadius(28)
+                }
+                .padding(.horizontal, 24)
+                .padding(.bottom, 20)
+                .opacity(appeared ? 1 : 0)
+                
+                // Подпись снизу
+                Text("Продолжить на русском")
+                    .font(.system(size: 15))
+                    .foregroundColor(.white)
+                    .padding(.bottom, 40)
+                    .opacity(appeared ? 1 : 0)
+            }
+        }
+        .preferredColorScheme(.dark)
+        .onAppear {
+            withAnimation(.easeOut(duration: 1.0)) {
+                appeared = true
+            }
+        }
+    }
+}
+
+// MARK: - Phone Entry Screen
 struct PhoneEntryView: View {
-    @Binding var isLoggedIn: Bool
+    let onLogin: () -> Void
     @State private var phone = ""
     @State private var selectedCountry = countries[0]
     @State private var showCountryPicker = false
@@ -97,18 +198,15 @@ struct PhoneEntryView: View {
                     VStack(spacing: 0) {
                         Spacer().frame(height: 40)
                         
-                        // Телефончик
                         Text("☎️")
                             .font(.system(size: 70))
                             .padding(.bottom, 20)
                         
-                        // Заголовок
                         Text("Телефон")
                             .font(.system(size: 28, weight: .bold))
                             .foregroundColor(.white)
                             .padding(.bottom, 16)
                         
-                        // Подсказка
                         VStack(spacing: 4) {
                             Text("Введите свой номер телефона")
                                 .font(.system(size: 15))
@@ -120,13 +218,11 @@ struct PhoneEntryView: View {
                         }
                         .padding(.bottom, 40)
                         
-                        // Выбор страны
                         Button(action: {
                             showCountryPicker = true
                         }) {
                             HStack {
-                                Text(selectedCountry.flag)
-                                    .font(.system(size: 22))
+                                Text(selectedCountry.flag).font(.system(size: 22))
                                 Text(selectedCountry.name)
                                     .font(.system(size: 17))
                                     .foregroundColor(.blue)
@@ -141,7 +237,6 @@ struct PhoneEntryView: View {
                         
                         Divider().background(Color.white.opacity(0.1))
                         
-                        // Поле ввода номера
                         HStack(spacing: 12) {
                             Text(selectedCountry.code)
                                 .font(.system(size: 20))
@@ -162,10 +257,7 @@ struct PhoneEntryView: View {
                         
                         Divider().background(Color.white.opacity(0.1))
                         
-                        // Кнопка Продолжить
-                        Button(action: {
-                            showConfirm = true
-                        }) {
+                        Button(action: { showConfirm = true }) {
                             Text("Продолжить")
                                 .font(.system(size: 17, weight: .semibold))
                                 .foregroundColor(.white)
@@ -188,11 +280,7 @@ struct PhoneEntryView: View {
             }
             .alert("Правильно ли указан номер?", isPresented: $showConfirm) {
                 Button("Изменить", role: .cancel) { }
-                Button("Продолжить") {
-                    withAnimation {
-                        isLoggedIn = true
-                    }
-                }
+                Button("Продолжить") { onLogin() }
             } message: {
                 Text("\(selectedCountry.code) \(phone)")
             }
@@ -201,7 +289,7 @@ struct PhoneEntryView: View {
     }
 }
 
-// MARK: - Выбор страны
+// MARK: - Country Picker
 struct CountryPickerView: View {
     @Binding var selected: Country
     @Environment(\.dismiss) var dismiss
@@ -221,16 +309,12 @@ struct CountryPickerView: View {
                         dismiss()
                     }) {
                         HStack {
-                            Text(country.flag)
-                                .font(.system(size: 22))
-                            Text(country.name)
-                                .foregroundColor(.white)
+                            Text(country.flag).font(.system(size: 22))
+                            Text(country.name).foregroundColor(.white)
                             Spacer()
-                            Text(country.code)
-                                .foregroundColor(.gray)
+                            Text(country.code).foregroundColor(.gray)
                             if country.id == selected.id {
-                                Image(systemName: "checkmark")
-                                    .foregroundColor(.blue)
+                                Image(systemName: "checkmark").foregroundColor(.blue)
                             }
                         }
                     }
@@ -250,7 +334,7 @@ struct CountryPickerView: View {
     }
 }
 
-// MARK: - Главный экран
+// MARK: - Main
 struct MainView: View {
     @State private var selectedTab = 0
     
