@@ -317,6 +317,8 @@ class TelegramManager: ObservableObject {
                 self.connectionStatus = "Обновление..."
             case .connectionStateWaitingForNetwork:
                 self.connectionStatus = "Ожидание сети..."
+            default:
+                self.connectionStatus = "Синхронизация..."
             }
             
         case .updateUser(let u):
@@ -564,14 +566,13 @@ class TelegramManager: ObservableObject {
         )
         
         Task {
-            let replyTo: InputMessageReplyTo? = (replyToMessageId != nil) ? .inputMessageReplyToMessage(InputMessageReplyToMessage(chatId: nil, messageId: replyToMessageId, quote: nil)) : nil
             _ = try? await client?.sendMessage(
                 chatId: chatId,
                 inputMessageContent: content,
-                messageThreadId: 0,
                 options: nil,
                 replyMarkup: nil,
-                replyTo: replyTo
+                replyTo: nil,
+                topicId: nil
             )
         }
     }
@@ -627,7 +628,7 @@ class TelegramManager: ObservableObject {
             return
         }
         Task {
-            _ = try? await client?.sendChatAction(action: .chatActionTyping, businessConnectionId: nil, chatId: chatId, messageThreadId: 0)
+            _ = try? await client?.sendChatAction(action: .chatActionTyping, businessConnectionId: nil, chatId: chatId, topicId: nil)
         }
     }
     
@@ -837,11 +838,9 @@ struct CountryPickerModal: View {
             .searchable(text: $query, prompt: "Поиск страны")
             .navigationTitle("Выберите страну")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Отмена") { dismiss() }
-                }
-            }
+            .navigationBarItems(
+                leading: Button("Отмена") { dismiss() }
+            )
         }
     }
 }
@@ -939,15 +938,13 @@ struct CallsScreenView: View {
                 .listStyle(.insetGrouped)
             }
             .navigationTitle("Звонки")
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button {
-                        callManager.startCall(name: "Павел Дуров", isVideo: false)
-                    } label: {
-                        Image(systemName: "phone.badge.plus")
-                    }
+            .navigationBarItems(
+                trailing: Button {
+                    callManager.startCall(name: "Павел Дуров", isVideo: false)
+                } label: {
+                    Image(systemName: "phone.badge.plus")
                 }
-            }
+            )
         }
     }
 }
@@ -1135,23 +1132,19 @@ struct ChatsListScreen: View {
             .listStyle(.insetGrouped)
             .searchable(text: $searchQuery, prompt: "Поиск по чатам и сообщениям")
             .navigationTitle("Чаты")
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    HStack(spacing: 6) {
-                        Circle()
-                            .fill(telegram.connectionStatus == "Подключено" ? Color.green : Color.orange)
-                            .frame(width: 8, height: 8)
-                        Text(telegram.connectionStatus)
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    }
+            .navigationBarItems(
+                leading: HStack(spacing: 6) {
+                    Circle()
+                        .fill(telegram.connectionStatus == "Подключено" ? Color.green : Color.orange)
+                        .frame(width: 8, height: 8)
+                    Text(telegram.connectionStatus)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                },
+                trailing: Button(action: { telegram.loadInitialChats() }) {
+                    Image(systemName: "arrow.clockwise")
                 }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(action: { telegram.loadInitialChats() }) {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                }
-            }
+            )
         }
     }
 }
@@ -1424,24 +1417,22 @@ struct ChatConversationView: View {
         }
         .navigationTitle(chat.title)
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                HStack(spacing: 16) {
-                    Button {
-                        callManager.startCall(name: chat.title, isVideo: false)
-                    } label: {
-                        Image(systemName: "phone")
-                    }
-                    
-                    Button {
-                        ghostMode.toggleChatGhost(chatId: chat.id)
-                    } label: {
-                        Image(systemName: ghostMode.isGhostActive(for: chat.id) ? "eye.slash.fill" : "eye")
-                            .foregroundColor(ghostMode.isGhostActive(for: chat.id) ? .purple : .secondary)
-                    }
+        .navigationBarItems(
+            trailing: HStack(spacing: 16) {
+                Button {
+                    callManager.startCall(name: chat.title, isVideo: false)
+                } label: {
+                    Image(systemName: "phone")
+                }
+                
+                Button {
+                    ghostMode.toggleChatGhost(chatId: chat.id)
+                } label: {
+                    Image(systemName: ghostMode.isGhostActive(for: chat.id) ? "eye.slash.fill" : "eye")
+                        .foregroundColor(ghostMode.isGhostActive(for: chat.id) ? .purple : .secondary)
                 }
             }
-        }
+        )
     }
     
     private func sendMessage() {
@@ -1612,6 +1603,29 @@ struct MessageBubbleCell: View {
     }
 }
 
+// MARK: - Empty State Helper
+struct EmptyStateView: View {
+    let title: String
+    let systemImage: String
+    let description: String
+    
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: systemImage)
+                .font(.system(size: 48))
+                .foregroundColor(.secondary)
+            Text(title)
+                .font(.headline)
+            Text(description)
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .padding(40)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
 // MARK: - Saved Deleted Messages Screen
 struct SavedDeletedMessagesScreen: View {
     @EnvironmentObject var deletedStore: DeletedMessagesStore
@@ -1621,10 +1635,10 @@ struct SavedDeletedMessagesScreen: View {
         NavigationStack {
             Group {
                 if deletedStore.savedDeletedMessages.isEmpty {
-                    ContentUnavailableView(
-                        "Нет удалённых сообщений",
+                    EmptyStateView(
+                        title: "Нет удалённых сообщений",
                         systemImage: "trash.slash.fill",
-                        description: Text("Здесь появятся сообщения, которые собеседники удалят из Telegram после получения.")
+                        description: "Здесь появятся сообщения, которые собеседники удалят из Telegram после получения."
                     )
                 } else {
                     List {
@@ -1653,8 +1667,8 @@ struct SavedDeletedMessagesScreen: View {
                 }
             }
             .navigationTitle("Удалённые сообщения")
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
+            .navigationBarItems(
+                trailing: Group {
                     if !deletedStore.savedDeletedMessages.isEmpty {
                         Button(role: .destructive) {
                             showConfirmClear = true
@@ -1663,7 +1677,7 @@ struct SavedDeletedMessagesScreen: View {
                         }
                     }
                 }
-            }
+            )
             .confirmationDialog("Очистить историю удалённых сообщений?", isPresented: $showConfirmClear) {
                 Button("Очистить всё", role: .destructive) {
                     deletedStore.clearAllHistory()

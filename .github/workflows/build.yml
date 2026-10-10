@@ -51,7 +51,7 @@ jobs:
           name: kochgramm
           options:
             deploymentTarget:
-              iOS: "16.0"
+              iOS: "17.0"
           packages:
             TDLibKit:
               url: https://github.com/Swiftgram/TDLibKit
