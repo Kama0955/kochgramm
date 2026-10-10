@@ -3,6 +3,8 @@ import Combine
 import Foundation
 import TDLibKit
 
+typealias Date = Foundation.Date
+
 // MARK: - Telegram Configuration
 let kochApiId: Int = 31805867
 let kochApiHash: String = "API_HASH_PLACEHOLDER"
