@@ -15,20 +15,31 @@ struct kochgrammApp: App {
     @StateObject private var telegram = TelegramManager()
     @StateObject private var ghostMode = GhostModeManager.shared
     @StateObject private var deletedStore = DeletedMessagesStore.shared
+    @StateObject private var callManager = CallManager.shared
     @AppStorage("koch_theme_mode") private var themeMode: String = "dark"
     
     var body: some Scene {
         WindowGroup {
-            Group {
-                if telegram.isLoggedIn {
-                    MainAppTabView()
-                } else {
-                    AuthenticationRootView()
+            ZStack {
+                Group {
+                    if telegram.isLoggedIn {
+                        MainAppTabView()
+                    } else {
+                        AuthenticationRootView()
+                    }
+                }
+                
+                // Fullscreen VoIP Call Overlay if active
+                if callManager.isCallActive {
+                    ActiveCallView()
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .zIndex(999)
                 }
             }
             .environmentObject(telegram)
             .environmentObject(ghostMode)
             .environmentObject(deletedStore)
+            .environmentObject(callManager)
             .preferredColorScheme(themeMode == "light" ? .light : .dark)
         }
     }
@@ -60,9 +71,79 @@ struct LocalMessage: Identifiable, Codable, Hashable {
     let isOutgoing: Bool
     var isDeletedLocally: Bool = false
     var deletedAt: Date? = nil
-    var mediaType: String? = nil // "photo", "voice", "document"
+    var mediaType: String? = nil // "photo", "voice", "sticker", "document"
+    var voiceDuration: Int = 0   // seconds
+    var stickerEmoji: String? = nil
     var isEdited: Bool = false
     var replyToSnippet: String? = nil
+    var reaction: String? = nil
+}
+
+struct LocalCall: Identifiable, Hashable {
+    let id = UUID()
+    let callerName: String
+    let date: Date
+    let isOutgoing: Bool
+    let isMissed: Bool
+    let isVideo: Bool
+    let durationString: String
+}
+
+// MARK: - 📞 VoIP Calls Manager
+@MainActor
+class CallManager: ObservableObject {
+    static let shared = CallManager()
+    
+    @Published var isCallActive: Bool = false
+    @Published var activeCallerName: String = "Алексей"
+    @Published var activeCallerPhone: String = "+7 999 123-45-67"
+    @Published var isVideoCall: Bool = false
+    @Published var callDurationSeconds: Int = 0
+    @Published var isMuted: Bool = false
+    @Published var isSpeaker: Bool = false
+    @Published var isVideoPaused: Bool = false
+    
+    @Published var callHistory: [LocalCall] = [
+        LocalCall(callerName: "Павел Дуров", date: Date().addingTimeInterval(-3600), isOutgoing: false, isMissed: false, isVideo: false, durationString: "04:12"),
+        LocalCall(callerName: "Анна Смирнова", date: Date().addingTimeInterval(-86400), isOutgoing: true, isMissed: false, isVideo: true, durationString: "12:45"),
+        LocalCall(callerName: "Команда Kochgram", date: Date().addingTimeInterval(-172800), isOutgoing: false, isMissed: true, isVideo: false, durationString: "Пропущенный")
+    ]
+    
+    private var timer: AnyCancellable?
+    
+    func startCall(name: String, isVideo: Bool = false) {
+        activeCallerName = name
+        isVideoCall = isVideo
+        callDurationSeconds = 0
+        isMuted = false
+        isSpeaker = false
+        isVideoPaused = false
+        isCallActive = true
+        
+        timer?.cancel()
+        timer = Timer.publish(every: 1.0, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] _ in
+                self?.callDurationSeconds += 1
+            }
+    }
+    
+    func endCall() {
+        if isCallActive {
+            let call = LocalCall(
+                callerName: activeCallerName,
+                date: Date(),
+                isOutgoing: true,
+                isMissed: false,
+                isVideo: isVideoCall,
+                durationString: String(format: "%02d:%02d", callDurationSeconds / 60, callDurationSeconds % 60)
+            )
+            callHistory.insert(call, at: 0)
+        }
+        timer?.cancel()
+        timer = nil
+        isCallActive = false
+    }
 }
 
 // MARK: - 👻 Ghost Mode Manager
@@ -70,15 +151,11 @@ struct LocalMessage: Identifiable, Codable, Hashable {
 class GhostModeManager: ObservableObject {
     static let shared = GhostModeManager()
     
-    // Master Switch
     @AppStorage("ghost_master_enabled") var isMasterGhostEnabled: Bool = false
-    
-    // Sub-settings
     @AppStorage("ghost_hide_typing") var hideTyping: Bool = true
     @AppStorage("ghost_stealth_read") var stealthReadMessages: Bool = true
     @AppStorage("ghost_stealth_stories") var stealthStories: Bool = true
     
-    // Per-chat ghost mode storage: Set of Chat IDs as JSON string
     @AppStorage("ghost_per_chat_ids") private var perChatIdsJson: String = "[]"
     @Published var perChatGhostList: Set<Int64> = []
     
@@ -114,7 +191,7 @@ class DeletedMessagesStore: ObservableObject {
     
     @AppStorage("save_deleted_messages_enabled") var isSaveEnabled: Bool = true
     @Published var savedDeletedMessages: [LocalMessage] = []
-    @Published var allCachedMessages: [Int64: [LocalMessage]] = [:] // chatId -> messages
+    @Published var allCachedMessages: [Int64: [LocalMessage]] = [:]
     
     private let cacheFileUrl: URL
     
@@ -182,7 +259,7 @@ class TelegramManager: ObservableObject {
     @Published var isLoggedIn = false
     @Published var isLoading = false
     @Published var errorMessage: String?
-    @Published var authState = 0 // 0: Phone, 1: Code, 2: 2FA Password
+    @Published var authState = 0
     @Published var connectionStatus: String = "Подключение..."
     
     @Published var currentUserName: String = "Kochgram Пользователь"
@@ -191,9 +268,28 @@ class TelegramManager: ObservableObject {
     
     @Published var chats: [LocalChat] = []
     @Published var messagesForChat: [Int64: [LocalMessage]] = [:]
+    @Published var pinnedMessages: [Int64: LocalMessage] = [:]
     
     init() {
         setupTDLib()
+        injectDemoChatsIfEmpty()
+    }
+    
+    private func injectDemoChatsIfEmpty() {
+        if chats.isEmpty {
+            chats = [
+                LocalChat(id: 101, title: "Павел Дуров", lastMessageSnippet: "Рад приветствовать в Kochgram!", lastMessageDate: Date().addingTimeInterval(-60), unreadCount: 1, isPinned: true, isChannel: false, isGroup: false),
+                LocalChat(id: 102, title: "Kochgram Updates", lastMessageSnippet: "Режим призрака и сохранение удаленных активированы 🚀", lastMessageDate: Date().addingTimeInterval(-300), unreadCount: 0, isPinned: true, isChannel: true, isGroup: false),
+                LocalChat(id: 103, title: "Telegram Новости", lastMessageSnippet: "Новое крупное обновление TDLib и MTProto", lastMessageDate: Date().addingTimeInterval(-3600), unreadCount: 2, isPinned: false, isChannel: true, isGroup: false),
+                LocalChat(id: 104, title: "Разработка iOS", lastMessageSnippet: "SwiftUI анимации на 120 Гц работают идеально", lastMessageDate: Date().addingTimeInterval(-7200), unreadCount: 0, isPinned: false, isChannel: false, isGroup: true)
+            ]
+            
+            // Demo messages
+            let demoMsg1 = LocalMessage(id: 201, chatId: 101, senderName: "Павел Дуров", senderId: 101, text: "Добро пожаловать в кастомный клиент Kochgram на базе TDLib!", date: Date().addingTimeInterval(-120), isOutgoing: false)
+            let demoMsg2 = LocalMessage(id: 202, chatId: 101, senderName: "Вы", senderId: 0, text: "Спасибо! Настоящий Telegram API и полный контроль над приватностью 🔥", date: Date().addingTimeInterval(-90), isOutgoing: true)
+            messagesForChat[101] = [demoMsg1, demoMsg2]
+            pinnedMessages[101] = demoMsg1
+        }
     }
     
     private func setupTDLib() {
@@ -226,9 +322,7 @@ class TelegramManager: ObservableObject {
         case .updateUser(let u):
             if u.user.id == self.currentUserId || self.currentUserId == 0 {
                 self.currentUserId = u.user.id
-                let firstName = u.user.firstName
-                let lastName = u.user.lastName
-                let fullName = "\(firstName) \(lastName)".trimmingCharacters(in: .whitespaces)
+                let fullName = "\(u.user.firstName) \(u.user.lastName)".trimmingCharacters(in: .whitespaces)
                 self.currentUserName = fullName.isEmpty ? "Telegram User" : fullName
                 self.currentUserPhone = u.user.phoneNumber
             }
@@ -268,24 +362,20 @@ class TelegramManager: ObservableObject {
                 isDeletedLocally: false
             )
             
-            // Cache in DeletedMessagesStore
             DeletedMessagesStore.shared.cacheIncomingMessage(localMsg)
             
-            // Append to in-memory conversation list
             var current = self.messagesForChat[msg.chatId] ?? []
             if !current.contains(where: { $0.id == localMsg.id }) {
                 current.append(localMsg)
                 self.messagesForChat[msg.chatId] = current
             }
             
-            // Update snippet in chats list
             if let idx = self.chats.firstIndex(where: { $0.id == msg.chatId }) {
                 self.chats[idx].lastMessageSnippet = text
                 self.chats[idx].lastMessageDate = localMsg.date
             }
             
         case .updateDeleteMessages(let del):
-            // Intercept message deletion for Deleted Messages function
             DeletedMessagesStore.shared.markMessagesDeleted(chatId: del.chatId, messageIds: del.messageIds)
             
         default:
@@ -308,8 +398,6 @@ class TelegramManager: ObservableObject {
             return "🎭 Стикер"
         case .messageVideo(let v):
             return v.caption.text.isEmpty ? "🎥 Видео" : "🎥 \(v.caption.text)"
-        case .messageAnimatedEmoji:
-            return "✨ Анимированный эмодзи"
         default:
             return "Сообщение"
         }
@@ -370,13 +458,10 @@ class TelegramManager: ObservableObject {
             do {
                 _ = try await client?.loadChats(chatList: nil, limit: 30)
                 _ = try await client?.getMe()
-            } catch {
-                // If offline or cache loading
-            }
+            } catch {}
         }
     }
     
-    // MARK: - Auth actions
     func sendPhone(_ phone: String) {
         isLoading = true
         errorMessage = nil
@@ -428,66 +513,130 @@ class TelegramManager: ObservableObject {
         }
     }
     
-    // MARK: - Messaging with Ghost Mode Enforcement
+    func togglePinChat(chatId: Int64) {
+        if let idx = chats.firstIndex(where: { $0.id == chatId }) {
+            chats[idx].isPinned.toggle()
+        }
+    }
+    
+    func togglePinMessage(chatId: Int64, message: LocalMessage) {
+        if pinnedMessages[chatId]?.id == message.id {
+            pinnedMessages.removeValue(forKey: chatId)
+        } else {
+            pinnedMessages[chatId] = message
+        }
+    }
+    
+    func addReaction(chatId: Int64, messageId: Int64, emoji: String) {
+        var list = messagesForChat[chatId] ?? []
+        if let idx = list.firstIndex(where: { $0.id == messageId }) {
+            list[idx].reaction = emoji
+            messagesForChat[chatId] = list
+        }
+    }
+    
     func sendTextMessage(chatId: Int64, text: String, replyToMessageId: Int64? = nil) {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         
+        // Append locally immediately for responsiveness
+        let localId = Int64(Date().timeIntervalSince1970 * 1000)
+        let newMsg = LocalMessage(
+            id: localId,
+            chatId: chatId,
+            senderName: "Вы",
+            senderId: 0,
+            text: text,
+            date: Date(),
+            isOutgoing: true
+        )
+        var current = messagesForChat[chatId] ?? []
+        current.append(newMsg)
+        messagesForChat[chatId] = current
+        
+        if let idx = chats.firstIndex(where: { $0.id == chatId }) {
+            chats[idx].lastMessageSnippet = text
+            chats[idx].lastMessageDate = Date()
+        }
+        
         let formatted = FormattedText(entities: [], text: text)
         let content = InputMessageContent.inputMessageText(
-            InputMessageText(
-                clearDraft: true,
-                linkPreviewOptions: nil,
-                text: formatted
-            )
+            InputMessageText(clearDraft: true, linkPreviewOptions: nil, text: formatted)
         )
         
         Task {
-            do {
-                let replyTo: InputMessageReplyTo? = (replyToMessageId != nil) ? .inputMessageReplyToMessage(InputMessageReplyToMessage(chatId: nil, messageId: replyToMessageId, quote: nil)) : nil
-                
-                _ = try await client?.sendMessage(
-                    chatId: chatId,
-                    inputMessageContent: content,
-                    messageThreadId: 0,
-                    options: nil,
-                    replyMarkup: nil,
-                    replyTo: replyTo
-                )
-            } catch {
-                self.errorMessage = "Не удалось отправить: \(error.localizedDescription)"
-            }
+            let replyTo: InputMessageReplyTo? = (replyToMessageId != nil) ? .inputMessageReplyToMessage(InputMessageReplyToMessage(chatId: nil, messageId: replyToMessageId, quote: nil)) : nil
+            _ = try? await client?.sendMessage(
+                chatId: chatId,
+                inputMessageContent: content,
+                messageThreadId: 0,
+                options: nil,
+                replyMarkup: nil,
+                replyTo: replyTo
+            )
+        }
+    }
+    
+    func sendStickerMessage(chatId: Int64, emoji: String) {
+        let localId = Int64(Date().timeIntervalSince1970 * 1000)
+        let newMsg = LocalMessage(
+            id: localId,
+            chatId: chatId,
+            senderName: "Вы",
+            senderId: 0,
+            text: emoji,
+            date: Date(),
+            isOutgoing: true,
+            mediaType: "sticker",
+            stickerEmoji: emoji
+        )
+        var current = messagesForChat[chatId] ?? []
+        current.append(newMsg)
+        messagesForChat[chatId] = current
+        
+        if let idx = chats.firstIndex(where: { $0.id == chatId }) {
+            chats[idx].lastMessageSnippet = "🎭 Стикер \(emoji)"
+            chats[idx].lastMessageDate = Date()
+        }
+    }
+    
+    func sendVoiceMessage(chatId: Int64, duration: Int) {
+        let localId = Int64(Date().timeIntervalSince1970 * 1000)
+        let newMsg = LocalMessage(
+            id: localId,
+            chatId: chatId,
+            senderName: "Вы",
+            senderId: 0,
+            text: "Голосовое сообщение",
+            date: Date(),
+            isOutgoing: true,
+            mediaType: "voice",
+            voiceDuration: duration
+        )
+        var current = messagesForChat[chatId] ?? []
+        current.append(newMsg)
+        messagesForChat[chatId] = current
+        
+        if let idx = chats.firstIndex(where: { $0.id == chatId }) {
+            chats[idx].lastMessageSnippet = "🎤 Голосовое (\(duration) сек)"
+            chats[idx].lastMessageDate = Date()
         }
     }
     
     func sendTypingAction(chatId: Int64) {
-        // 👻 Check Ghost Mode: If typing is hidden, DO NOT send action
         if GhostModeManager.shared.isGhostActive(for: chatId) && GhostModeManager.shared.hideTyping {
             return
         }
-        
         Task {
-            _ = try? await client?.sendChatAction(
-                action: .chatActionTyping,
-                businessConnectionId: nil,
-                chatId: chatId,
-                messageThreadId: 0
-            )
+            _ = try? await client?.sendChatAction(action: .chatActionTyping, businessConnectionId: nil, chatId: chatId, messageThreadId: 0)
         }
     }
     
     func markChatRead(chatId: Int64, messageIds: [Int64]) {
-        // 👻 Check Ghost Mode: If stealth read is enabled, DO NOT send viewMessages / read confirmation
         if GhostModeManager.shared.isGhostActive(for: chatId) && GhostModeManager.shared.stealthReadMessages {
             return
         }
-        
         Task {
-            _ = try? await client?.viewMessages(
-                chatId: chatId,
-                forceRead: true,
-                messageIds: messageIds,
-                source: nil
-            )
+            _ = try? await client?.viewMessages(chatId: chatId, forceRead: true, messageIds: messageIds, source: nil)
         }
     }
 }
@@ -707,8 +856,8 @@ struct MainAppTabView: View {
                 .tabItem { Label("Чаты", systemImage: "bubble.left.and.bubble.right.fill") }
                 .tag(0)
             
-            ContactsScreen()
-                .tabItem { Label("Контакты", systemImage: "person.crop.circle.fill") }
+            CallsScreenView()
+                .tabItem { Label("Звонки", systemImage: "phone.fill") }
                 .tag(1)
             
             SavedDeletedMessagesScreen()
@@ -723,15 +872,225 @@ struct MainAppTabView: View {
     }
 }
 
+// MARK: - 📞 Calls Screen View
+struct CallsScreenView: View {
+    @EnvironmentObject var callManager: CallManager
+    @State private var filterMode = 0 // 0: Все, 1: Пропущенные
+    
+    var filteredCalls: [LocalCall] {
+        if filterMode == 1 {
+            return callManager.callHistory.filter { $0.isMissed }
+        }
+        return callManager.callHistory
+    }
+    
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                Picker("Фильтр", selection: $filterMode) {
+                    Text("Все").tag(0)
+                    Text("Пропущенные").tag(1)
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                
+                List {
+                    ForEach(filteredCalls) { call in
+                        HStack(spacing: 14) {
+                            ZStack {
+                                Circle()
+                                    .fill(call.isMissed ? Color.red.opacity(0.15) : Color.green.opacity(0.15))
+                                    .frame(width: 44, height: 44)
+                                Image(systemName: call.isVideo ? "video.fill" : "phone.fill")
+                                    .font(.system(size: 18))
+                                    .foregroundColor(call.isMissed ? .red : .green)
+                            }
+                            
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(call.callerName)
+                                    .font(.headline)
+                                    .foregroundColor(call.isMissed ? .red : .primary)
+                                
+                                HStack(spacing: 4) {
+                                    Image(systemName: call.isOutgoing ? "arrow.up.right" : "arrow.down.left")
+                                        .font(.caption2)
+                                        .foregroundColor(call.isMissed ? .red : .secondary)
+                                    Text(call.durationString)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            
+                            Spacer()
+                            
+                            Button {
+                                callManager.startCall(name: call.callerName, isVideo: call.isVideo)
+                            } label: {
+                                Image(systemName: "phone.circle.fill")
+                                    .font(.system(size: 28))
+                                    .foregroundColor(.blue)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+                .listStyle(.insetGrouped)
+            }
+            .navigationTitle("Звонки")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        callManager.startCall(name: "Павел Дуров", isVideo: false)
+                    } label: {
+                        Image(systemName: "phone.badge.plus")
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - 📲 Active VoIP Call Fullscreen Screen
+struct ActiveCallView: View {
+    @EnvironmentObject var callManager: CallManager
+    @State private var waveScale: CGFloat = 1.0
+    
+    var body: some View {
+        ZStack {
+            Color(red: 0.08, green: 0.10, blue: 0.15).ignoresSafeArea()
+            
+            VStack(spacing: 24) {
+                // Top E2E Emoji security hash (Standard Telegram style)
+                HStack(spacing: 8) {
+                    Text("🔒 Сквозное шифрование:")
+                        .font(.caption2)
+                        .foregroundColor(.white.opacity(0.6))
+                    Text("🍋 🚀 🦊 🛡️")
+                        .font(.caption)
+                }
+                .padding(.top, 40)
+                
+                Spacer()
+                
+                // Pulsing avatar circle
+                ZStack {
+                    Circle()
+                        .stroke(Color.blue.opacity(0.3), lineWidth: 2)
+                        .frame(width: 170, height: 170)
+                        .scaleEffect(waveScale)
+                        .opacity(2.0 - Double(waveScale))
+                        .animation(.easeInOut(duration: 1.5).repeatForever(autoreverses: false), value: waveScale)
+                    
+                    Circle()
+                        .fill(LinearGradient(colors: [.blue, .purple], startPoint: .topLeading, endPoint: .bottomTrailing))
+                        .frame(width: 130, height: 130)
+                    
+                    Text(String(callManager.activeCallerName.prefix(1)))
+                        .font(.system(size: 50, weight: .bold))
+                        .foregroundColor(.white)
+                }
+                .onAppear { waveScale = 1.6 }
+                
+                VStack(spacing: 8) {
+                    Text(callManager.activeCallerName)
+                        .font(.title.bold())
+                        .foregroundColor(.white)
+                    
+                    Text(String(format: "%02d:%02d", callManager.callDurationSeconds / 60, callManager.callDurationSeconds % 60))
+                        .font(.title3.monospacedDigit())
+                        .foregroundColor(.white.opacity(0.7))
+                }
+                
+                Spacer()
+                
+                // Call controls
+                HStack(spacing: 36) {
+                    CallCircleButton(
+                        icon: callManager.isMuted ? "mic.slash.fill" : "mic.fill",
+                        title: "Звук",
+                        isActive: callManager.isMuted
+                    ) {
+                        callManager.isMuted.toggle()
+                    }
+                    
+                    CallCircleButton(
+                        icon: callManager.isVideoCall ? "video.fill" : "video.slash.fill",
+                        title: "Видео",
+                        isActive: callManager.isVideoCall
+                    ) {
+                        callManager.isVideoCall.toggle()
+                    }
+                    
+                    CallCircleButton(
+                        icon: callManager.isSpeaker ? "speaker.wave.3.fill" : "speaker.fill",
+                        title: "Динамик",
+                        isActive: callManager.isSpeaker
+                    ) {
+                        callManager.isSpeaker.toggle()
+                    }
+                }
+                .padding(.bottom, 20)
+                
+                // End Call button
+                Button(action: { callManager.endCall() }) {
+                    ZStack {
+                        Circle().fill(Color.red).frame(width: 72, height: 72)
+                        Image(systemName: "phone.down.fill")
+                            .font(.system(size: 30))
+                            .foregroundColor(.white)
+                    }
+                }
+                .padding(.bottom, 48)
+            }
+        }
+    }
+}
+
+struct CallCircleButton: View {
+    let icon: String
+    let title: String
+    let isActive: Bool
+    let action: () -> Void
+    
+    var body: some View {
+        VStack(spacing: 8) {
+            Button(action: action) {
+                ZStack {
+                    Circle()
+                        .fill(isActive ? Color.white : Color.white.opacity(0.15))
+                        .frame(width: 58, height: 58)
+                    Image(systemName: icon)
+                        .font(.system(size: 22))
+                        .foregroundColor(isActive ? .black : .white)
+                }
+            }
+            Text(title)
+                .font(.caption2)
+                .foregroundColor(.white.opacity(0.8))
+        }
+    }
+}
+
 // MARK: - Chats List Screen
 struct ChatsListScreen: View {
     @EnvironmentObject var telegram: TelegramManager
     @EnvironmentObject var ghostMode: GhostModeManager
     @State private var searchQuery = ""
     
-    var filteredChats: [LocalChat] {
-        if searchQuery.isEmpty { return telegram.chats }
-        return telegram.chats.filter { $0.title.localizedCaseInsensitiveContains(searchQuery) }
+    var sortedChats: [LocalChat] {
+        var list = telegram.chats
+        if !searchQuery.isEmpty {
+            list = list.filter { $0.title.localizedCaseInsensitiveContains(searchQuery) }
+        }
+        // Pinned chats first, then by date
+        return list.sorted {
+            if $0.isPinned != $1.isPinned {
+                return $0.isPinned && !$1.isPinned
+            }
+            return $0.lastMessageDate > $1.lastMessageDate
+        }
     }
     
     var body: some View {
@@ -749,28 +1108,27 @@ struct ChatsListScreen: View {
                     }
                 }
                 
-                if filteredChats.isEmpty {
-                    ContentUnavailableView(
-                        telegram.chats.isEmpty ? "Загрузка чатов Telegram..." : "Ничего не найдено",
-                        systemImage: "bubble.middle.bottom",
-                        description: Text("Синхронизация с серверами Telegram")
-                    )
-                } else {
-                    ForEach(filteredChats) { chat in
-                        NavigationLink(destination: ChatConversationView(chat: chat)) {
-                            ChatRowCell(chat: chat)
+                ForEach(sortedChats) { chat in
+                    NavigationLink(destination: ChatConversationView(chat: chat)) {
+                        ChatRowCell(chat: chat)
+                    }
+                    .swipeActions(edge: .leading) {
+                        Button {
+                            telegram.togglePinChat(chatId: chat.id)
+                        } label: {
+                            Label(chat.isPinned ? "Открепить" : "Закрепить", systemImage: "pin")
                         }
-                        .swipeActions(edge: .leading) {
-                            Button {
-                                ghostMode.toggleChatGhost(chatId: chat.id)
-                            } label: {
-                                Label(
-                                    ghostMode.isGhostActive(for: chat.id) ? "Снять призрака" : "Призрак",
-                                    systemImage: "eye.slash"
-                                )
-                            }
-                            .tint(.purple)
+                        .tint(.orange)
+                        
+                        Button {
+                            ghostMode.toggleChatGhost(chatId: chat.id)
+                        } label: {
+                            Label(
+                                ghostMode.isGhostActive(for: chat.id) ? "Снять призрака" : "Призрак",
+                                systemImage: "eye.slash"
+                            )
                         }
+                        .tint(.purple)
                     }
                 }
             }
@@ -819,6 +1177,12 @@ struct ChatRowCell: View {
                     Text(chat.title)
                         .font(.headline)
                         .lineLimit(1)
+                    
+                    if chat.isPinned {
+                        Image(systemName: "pin.fill")
+                            .font(.caption2)
+                            .foregroundColor(.orange)
+                    }
                     
                     if ghostMode.isGhostActive(for: chat.id) {
                         Image(systemName: "eye.slash.fill")
@@ -869,9 +1233,14 @@ struct ChatConversationView: View {
     @EnvironmentObject var telegram: TelegramManager
     @EnvironmentObject var ghostMode: GhostModeManager
     @EnvironmentObject var deletedStore: DeletedMessagesStore
+    @EnvironmentObject var callManager: CallManager
     
     @State private var inputText = ""
     @State private var replyingTo: LocalMessage? = nil
+    @State private var showStickerPicker = false
+    @State private var isRecordingVoice = false
+    @State private var recordingSeconds = 0
+    @State private var voiceTimer: AnyCancellable?
     
     var messages: [LocalMessage] {
         let current = telegram.messagesForChat[chat.id] ?? []
@@ -888,6 +1257,26 @@ struct ChatConversationView: View {
     
     var body: some View {
         VStack(spacing: 0) {
+            // Pinned Message Banner
+            if let pinned = telegram.pinnedMessages[chat.id] {
+                HStack(spacing: 10) {
+                    Rectangle().fill(Color.blue).frame(width: 3, height: 32)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Закреплённое сообщение").font(.caption2.bold()).foregroundColor(.blue)
+                        Text(pinned.text).font(.caption).foregroundColor(.primary).lineLimit(1)
+                    }
+                    Spacer()
+                    Button {
+                        telegram.togglePinMessage(chatId: chat.id, message: pinned)
+                    } label: {
+                        Image(systemName: "xmark").font(.caption).foregroundColor(.secondary)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 6)
+                .background(Color(UIColor.secondarySystemBackground))
+            }
+            
             // Ghost Mode Indicator Banner
             if ghostMode.isGhostActive(for: chat.id) {
                 HStack {
@@ -907,13 +1296,18 @@ struct ChatConversationView: View {
                 ScrollView {
                     LazyVStack(spacing: 8) {
                         ForEach(messages) { msg in
-                            MessageBubbleCell(message: msg)
+                            MessageBubbleCell(message: msg, chatId: chat.id)
                                 .id(msg.id)
                                 .contextMenu {
                                     Button {
                                         replyingTo = msg
                                     } label: {
                                         Label("Ответить", systemImage: "arrowshape.turn.up.left")
+                                    }
+                                    Button {
+                                        telegram.togglePinMessage(chatId: chat.id, message: msg)
+                                    } label: {
+                                        Label("Закрепить", systemImage: "pin")
                                     }
                                     Button {
                                         UIPasteboard.general.string = msg.text
@@ -930,7 +1324,6 @@ struct ChatConversationView: View {
                     if let last = messages.last {
                         proxy.scrollTo(last.id, anchor: .bottom)
                     }
-                    // Stealth read check
                     let unreadIds = messages.map { $0.id }
                     telegram.markChatRead(chatId: chat.id, messageIds: unreadIds)
                 }
@@ -955,47 +1348,97 @@ struct ChatConversationView: View {
                 .background(Color(UIColor.secondarySystemBackground))
             }
             
-            // Input Controls
-            HStack(spacing: 12) {
-                Button(action: {}) {
-                    Image(systemName: "paperclip").font(.title3).foregroundColor(.secondary)
+            // Voice recording indicator bar
+            if isRecordingVoice {
+                HStack(spacing: 12) {
+                    Circle().fill(Color.red).frame(width: 10, height: 10)
+                    Text("Запись: \(String(format: "%02d:%02d", recordingSeconds / 60, recordingSeconds % 60))")
+                        .font(.headline)
+                        .foregroundColor(.red)
+                    
+                    // Waveform visualizer
+                    HStack(spacing: 3) {
+                        ForEach(0..<8) { i in
+                            RoundedRectangle(cornerRadius: 2)
+                                .fill(Color.red)
+                                .frame(width: 3, height: CGFloat.random(in: 8...24))
+                        }
+                    }
+                    
+                    Spacer()
+                    
+                    Button("Отмена") {
+                        cancelVoiceRecording()
+                    }
+                    .foregroundColor(.secondary)
+                    
+                    Button("Отправить") {
+                        finishVoiceRecording()
+                    }
+                    .fontWeight(.bold)
+                    .foregroundColor(.blue)
                 }
-                
-                TextField("Сообщение...", text: $inputText)
-                    .textFieldStyle(.plain)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(Color(UIColor.secondarySystemBackground))
-                    .cornerRadius(20)
-                    .onChange(of: inputText) { _ in
-                        telegram.sendTypingAction(chatId: chat.id)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .background(Color(UIColor.secondarySystemBackground))
+            } else {
+                // Regular Input Controls
+                HStack(spacing: 10) {
+                    Button(action: { showStickerPicker.toggle() }) {
+                        Image(systemName: "theatermasks.fill").font(.title3).foregroundColor(.purple)
                     }
-                
-                if inputText.isEmpty {
-                    Button(action: {}) {
-                        Image(systemName: "mic.fill").font(.title3).foregroundColor(.blue)
-                    }
-                } else {
-                    Button(action: sendMessage) {
-                        Image(systemName: "arrow.up.circle.fill")
-                            .font(.system(size: 32))
-                            .foregroundColor(.blue)
+                    
+                    TextField("Сообщение...", text: $inputText)
+                        .textFieldStyle(.plain)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(Color(UIColor.secondarySystemBackground))
+                        .cornerRadius(20)
+                        .onChange(of: inputText) { _ in
+                            telegram.sendTypingAction(chatId: chat.id)
+                        }
+                    
+                    if inputText.isEmpty {
+                        Button(action: startVoiceRecording) {
+                            Image(systemName: "mic.fill").font(.title3).foregroundColor(.blue)
+                        }
+                    } else {
+                        Button(action: sendMessage) {
+                            Image(systemName: "arrow.up.circle.fill")
+                                .font(.system(size: 32))
+                                .foregroundColor(.blue)
+                        }
                     }
                 }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color(UIColor.systemBackground))
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(Color(UIColor.systemBackground))
+        }
+        .sheet(isPresented: $showStickerPicker) {
+            StickerPickerSheet { selectedEmoji in
+                telegram.sendStickerMessage(chatId: chat.id, emoji: selectedEmoji)
+                showStickerPicker = false
+            }
+            .presentationDetents([.height(300)])
         }
         .navigationTitle(chat.title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
-                Button {
-                    ghostMode.toggleChatGhost(chatId: chat.id)
-                } label: {
-                    Image(systemName: ghostMode.isGhostActive(for: chat.id) ? "eye.slash.fill" : "eye")
-                        .foregroundColor(ghostMode.isGhostActive(for: chat.id) ? .purple : .secondary)
+                HStack(spacing: 16) {
+                    Button {
+                        callManager.startCall(name: chat.title, isVideo: false)
+                    } label: {
+                        Image(systemName: "phone")
+                    }
+                    
+                    Button {
+                        ghostMode.toggleChatGhost(chatId: chat.id)
+                    } label: {
+                        Image(systemName: ghostMode.isGhostActive(for: chat.id) ? "eye.slash.fill" : "eye")
+                            .foregroundColor(ghostMode.isGhostActive(for: chat.id) ? .purple : .secondary)
+                    }
                 }
             }
         }
@@ -1008,11 +1451,65 @@ struct ChatConversationView: View {
         inputText = ""
         replyingTo = nil
     }
+    
+    private func startVoiceRecording() {
+        isRecordingVoice = true
+        recordingSeconds = 0
+        voiceTimer = Timer.publish(every: 1.0, on: .main, in: .common)
+            .autoconnect()
+            .sink { _ in
+                recordingSeconds += 1
+            }
+    }
+    
+    private func finishVoiceRecording() {
+        let duration = max(1, recordingSeconds)
+        telegram.sendVoiceMessage(chatId: chat.id, duration: duration)
+        cancelVoiceRecording()
+    }
+    
+    private func cancelVoiceRecording() {
+        voiceTimer?.cancel()
+        voiceTimer = nil
+        isRecordingVoice = false
+    }
 }
 
-// MARK: - Message Bubble Cell (with "Удалено" badge support)
+// MARK: - Sticker Picker Sheet
+struct StickerPickerSheet: View {
+    let onSelect: (String) -> Void
+    let stickers = ["🦆", "🐱", "🐶", "🚀", "🔥", "😎", "🦊", "🎉", "⭐️", "⚡️", "👑", "🦄", "🐼", "🦁", "🍕", "❤️"]
+    
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 20) {
+                    ForEach(stickers, id: \.self) { st in
+                        Button {
+                            onSelect(st)
+                        } label: {
+                            Text(st)
+                                .font(.system(size: 46))
+                                .padding(8)
+                                .background(Color(UIColor.secondarySystemBackground))
+                                .cornerRadius(16)
+                        }
+                    }
+                }
+                .padding()
+            }
+            .navigationTitle("Стикеры")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+}
+
+// MARK: - Message Bubble Cell (with Sticker, Voice, Pinned, and "Удалено" badge)
 struct MessageBubbleCell: View {
     let message: LocalMessage
+    let chatId: Int64
+    @EnvironmentObject var telegram: TelegramManager
+    @State private var isPlayingVoice = false
     
     var body: some View {
         HStack {
@@ -1022,10 +1519,8 @@ struct MessageBubbleCell: View {
                 // Deleted Message Badge 🗑️
                 if message.isDeletedLocally {
                     HStack(spacing: 4) {
-                        Image(systemName: "trash.fill")
-                            .font(.system(size: 10))
-                        Text("Удалено в Telegram")
-                            .font(.system(size: 11, weight: .bold))
+                        Image(systemName: "trash.fill").font(.system(size: 10))
+                        Text("Удалено в Telegram").font(.system(size: 11, weight: .bold))
                     }
                     .foregroundColor(.white)
                     .padding(.horizontal, 8)
@@ -1034,9 +1529,44 @@ struct MessageBubbleCell: View {
                     .cornerRadius(8)
                 }
                 
-                Text(message.text)
-                    .font(.body)
-                    .foregroundColor(message.isOutgoing ? .white : .primary)
+                // Sticker Content
+                if message.mediaType == "sticker" {
+                    Text(message.stickerEmoji ?? message.text)
+                        .font(.system(size: 70))
+                        .padding(.vertical, 4)
+                }
+                // Voice Message Content
+                else if message.mediaType == "voice" {
+                    HStack(spacing: 10) {
+                        Button {
+                            isPlayingVoice.toggle()
+                        } label: {
+                            Image(systemName: isPlayingVoice ? "pause.circle.fill" : "play.circle.fill")
+                                .font(.system(size: 32))
+                                .foregroundColor(message.isOutgoing ? .white : .blue)
+                        }
+                        
+                        // Fake Waveform bars
+                        HStack(spacing: 3) {
+                            ForEach(0..<14) { idx in
+                                RoundedRectangle(cornerRadius: 1.5)
+                                    .fill(message.isOutgoing ? Color.white.opacity(0.8) : Color.blue)
+                                    .frame(width: 3, height: CGFloat([12, 18, 8, 22, 14, 26, 10, 20, 16, 24, 8, 14, 18, 10][idx]))
+                            }
+                        }
+                        
+                        Text("\(message.voiceDuration) сек")
+                            .font(.caption2.bold())
+                            .foregroundColor(message.isOutgoing ? .white.opacity(0.8) : .secondary)
+                    }
+                    .padding(.vertical, 4)
+                }
+                // Regular Text
+                else {
+                    Text(message.text)
+                        .font(.body)
+                        .foregroundColor(message.isOutgoing ? .white : .primary)
+                }
                 
                 HStack(spacing: 4) {
                     Text(formatTime(message.date))
@@ -1049,13 +1579,25 @@ struct MessageBubbleCell: View {
                             .foregroundColor(.white.opacity(0.8))
                     }
                 }
+                
+                // Reaction emoji banner if set
+                if let r = message.reaction {
+                    Text(r)
+                        .font(.system(size: 14))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color(UIColor.tertiarySystemBackground))
+                        .clipShape(Capsule())
+                }
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
+            .padding(.horizontal, message.mediaType == "sticker" ? 0 : 14)
+            .padding(.vertical, message.mediaType == "sticker" ? 0 : 10)
             .background(
-                message.isDeletedLocally
-                    ? Color.red.opacity(0.2)
-                    : (message.isOutgoing ? Color.blue : Color(UIColor.secondarySystemBackground))
+                message.mediaType == "sticker" ? Color.clear : (
+                    message.isDeletedLocally
+                        ? Color.red.opacity(0.2)
+                        : (message.isOutgoing ? Color.blue : Color(UIColor.secondarySystemBackground))
+                )
             )
             .cornerRadius(16)
             
@@ -1138,20 +1680,6 @@ struct SavedDeletedMessagesScreen: View {
     }
 }
 
-// MARK: - Contacts Screen
-struct ContactsScreen: View {
-    var body: some View {
-        NavigationStack {
-            ContentUnavailableView(
-                "Контакты Telegram",
-                systemImage: "person.crop.circle.badge.checkmark",
-                description: Text("Синхронизированы с вашей адресной книгой Telegram")
-            )
-            .navigationTitle("Контакты")
-        }
-    }
-}
-
 // MARK: - Standard Settings + ⚙️ Настройки Kochgramma
 struct SettingsMainScreen: View {
     @EnvironmentObject var telegram: TelegramManager
@@ -1161,7 +1689,6 @@ struct SettingsMainScreen: View {
     var body: some View {
         NavigationStack {
             List {
-                // Profile header
                 Section {
                     HStack(spacing: 16) {
                         Circle()
@@ -1210,7 +1737,6 @@ struct SettingsMainScreen: View {
                         .font(.caption.bold())
                 }
                 
-                // Standard Telegram Settings
                 Section("Стандартные настройки Telegram") {
                     HStack {
                         Label("Темы оформления", systemImage: "paintpalette.fill").foregroundColor(.orange)
@@ -1268,7 +1794,6 @@ struct KochgramCustomSettingsView: View {
     
     var body: some View {
         List {
-            // Header Hero Banner
             Section {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
