@@ -1,4 +1,4 @@
-name: Build iOS IPA
+name: Build iOS IPA & Android APK
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  build-ios:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -41,8 +41,9 @@ jobs:
           { "info" : { "version" : 1, "author" : "xcode" } }
           EOF
           
-          sed -i '' "s/API_ID_PLACEHOLDER/${{ secrets.API_ID }}/g" kochgrammApp.swift
-          sed -i '' "s/API_HASH_PLACEHOLDER/${{ secrets.API_HASH }}/g" kochgrammApp.swift
+          if [ -n "${{ secrets.API_HASH }}" ]; then
+            sed -i '' "s/API_HASH_PLACEHOLDER/${{ secrets.API_HASH }}/g" kochgramm/kochgrammApp.swift
+          fi
           
           cd kochgramm
           
@@ -99,9 +100,18 @@ jobs:
           mkdir Payload
           cp -r build/Build/Products/Debug-iphoneos/kochgramm.app Payload/
           zip -r kochgramm.ipa Payload
+          cp kochgramm.ipa ../downloads/kochgram.ipa || true
 
-      - name: Upload
+      - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: kochgramm-IPA
-          path: kochgramm/kochgramm.ipa
+          name: kochgram-iOS-IPA
+          path: |
+            kochgramm/kochgramm.ipa
+            downloads/kochgram.ipa
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kochgram-Android-APK
+          path: downloads/kochgram.apk

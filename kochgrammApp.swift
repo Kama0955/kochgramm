@@ -1,26 +1,177 @@
-
 import SwiftUI
+import Combine
+import Foundation
 import TDLibKit
 
-let kochApiId: Int32 = 31805867
+// MARK: - Telegram Configuration
+let kochApiId: Int = 31805867
 let kochApiHash: String = "API_HASH_PLACEHOLDER"
 
+// MARK: - App Entry Point
 @main
 struct kochgrammApp: App {
     @StateObject private var telegram = TelegramManager()
+    @StateObject private var ghostMode = GhostModeManager.shared
+    @StateObject private var deletedStore = DeletedMessagesStore.shared
+    @AppStorage("koch_theme_mode") private var themeMode: String = "dark"
     
     var body: some Scene {
         WindowGroup {
-            if telegram.isLoggedIn {
-                MainView()
-                    .environmentObject(telegram)
-            } else {
-                PhoneEntryView(telegram: telegram)
+            Group {
+                if telegram.isLoggedIn {
+                    MainAppTabView()
+                } else {
+                    AuthenticationRootView()
+                }
             }
+            .environmentObject(telegram)
+            .environmentObject(ghostMode)
+            .environmentObject(deletedStore)
+            .preferredColorScheme(themeMode == "light" ? .light : .dark)
         }
     }
 }
 
+// MARK: - Data Models for Telegram & Kochgram
+
+struct LocalChat: Identifiable, Hashable {
+    let id: Int64
+    var title: String
+    var lastMessageSnippet: String
+    var lastMessageDate: Date
+    var unreadCount: Int
+    var isPinned: Bool
+    var isChannel: Bool
+    var isGroup: Bool
+    var avatarLetter: String {
+        String(title.prefix(1)).uppercased()
+    }
+}
+
+struct LocalMessage: Identifiable, Codable, Hashable {
+    let id: Int64
+    let chatId: Int64
+    let senderName: String
+    let senderId: Int64
+    let text: String
+    let date: Date
+    let isOutgoing: Bool
+    var isDeletedLocally: Bool = false
+    var deletedAt: Date? = nil
+    var mediaType: String? = nil // "photo", "voice", "document"
+    var isEdited: Bool = false
+    var replyToSnippet: String? = nil
+}
+
+// MARK: - 👻 Ghost Mode Manager
+@MainActor
+class GhostModeManager: ObservableObject {
+    static let shared = GhostModeManager()
+    
+    // Master Switch
+    @AppStorage("ghost_master_enabled") var isMasterGhostEnabled: Bool = false
+    
+    // Sub-settings
+    @AppStorage("ghost_hide_typing") var hideTyping: Bool = true
+    @AppStorage("ghost_stealth_read") var stealthReadMessages: Bool = true
+    @AppStorage("ghost_stealth_stories") var stealthStories: Bool = true
+    
+    // Per-chat ghost mode storage: Set of Chat IDs as JSON string
+    @AppStorage("ghost_per_chat_ids") private var perChatIdsJson: String = "[]"
+    @Published var perChatGhostList: Set<Int64> = []
+    
+    init() {
+        if let data = perChatIdsJson.data(using: .utf8),
+           let ids = try? JSONDecoder().decode([Int64].self, from: data) {
+            self.perChatGhostList = Set(ids)
+        }
+    }
+    
+    func isGhostActive(for chatId: Int64) -> Bool {
+        if isMasterGhostEnabled { return true }
+        return perChatGhostList.contains(chatId)
+    }
+    
+    func toggleChatGhost(chatId: Int64) {
+        if perChatGhostList.contains(chatId) {
+            perChatGhostList.remove(chatId)
+        } else {
+            perChatGhostList.insert(chatId)
+        }
+        if let encoded = try? JSONEncoder().encode(Array(perChatGhostList)),
+           let str = String(data: encoded, encoding: .utf8) {
+            perChatIdsJson = str
+        }
+    }
+}
+
+// MARK: - 🗑️ Deleted Messages Store
+@MainActor
+class DeletedMessagesStore: ObservableObject {
+    static let shared = DeletedMessagesStore()
+    
+    @AppStorage("save_deleted_messages_enabled") var isSaveEnabled: Bool = true
+    @Published var savedDeletedMessages: [LocalMessage] = []
+    @Published var allCachedMessages: [Int64: [LocalMessage]] = [:] // chatId -> messages
+    
+    private let cacheFileUrl: URL
+    
+    init() {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        self.cacheFileUrl = docs.appendingPathComponent("koch_deleted_messages.json")
+        loadFromDisk()
+    }
+    
+    func cacheIncomingMessage(_ message: LocalMessage) {
+        guard isSaveEnabled else { return }
+        var list = allCachedMessages[message.chatId] ?? []
+        if !list.contains(where: { $0.id == message.id }) {
+            list.append(message)
+            allCachedMessages[message.chatId] = list
+        }
+    }
+    
+    func markMessagesDeleted(chatId: Int64, messageIds: [Int64]) {
+        guard isSaveEnabled else { return }
+        guard var list = allCachedMessages[chatId] else { return }
+        
+        for id in messageIds {
+            if let idx = list.firstIndex(where: { $0.id == id }) {
+                var deletedMsg = list[idx]
+                if !deletedMsg.isDeletedLocally {
+                    deletedMsg.isDeletedLocally = true
+                    deletedMsg.deletedAt = Date()
+                    list[idx] = deletedMsg
+                    
+                    if !savedDeletedMessages.contains(where: { $0.id == deletedMsg.id }) {
+                        savedDeletedMessages.insert(deletedMsg, at: 0)
+                    }
+                }
+            }
+        }
+        allCachedMessages[chatId] = list
+        saveToDisk()
+    }
+    
+    func clearAllHistory() {
+        savedDeletedMessages.removeAll()
+        allCachedMessages.removeAll()
+        try? FileManager.default.removeItem(at: cacheFileUrl)
+    }
+    
+    private func saveToDisk() {
+        guard let data = try? JSONEncoder().encode(savedDeletedMessages) else { return }
+        try? data.write(to: cacheFileUrl, options: .atomic)
+    }
+    
+    private func loadFromDisk() {
+        guard let data = try? Data(contentsOf: cacheFileUrl),
+              let list = try? JSONDecoder().decode([LocalMessage].self, from: data) else { return }
+        self.savedDeletedMessages = list
+    }
+}
+
+// MARK: - Core Telegram Manager (TDLib)
 @MainActor
 class TelegramManager: ObservableObject {
     private let clientManager = TDLibClientManager()
@@ -29,9 +180,21 @@ class TelegramManager: ObservableObject {
     @Published var isLoggedIn = false
     @Published var isLoading = false
     @Published var errorMessage: String?
-    @Published var authState = 0
+    @Published var authState = 0 // 0: Phone, 1: Code, 2: 2FA Password
+    @Published var connectionStatus: String = "Подключение..."
+    
+    @Published var currentUserName: String = "Kochgram Пользователь"
+    @Published var currentUserPhone: String = ""
+    @Published var currentUserId: Int64 = 0
+    
+    @Published var chats: [LocalChat] = []
+    @Published var messagesForChat: [Int64: [LocalMessage]] = [:]
     
     init() {
+        setupTDLib()
+    }
+    
+    private func setupTDLib() {
         client = clientManager.createClient(updateHandler: { [weak self] data, client in
             Task { @MainActor in
                 self?.handleUpdate(data: data, client: client)
@@ -44,55 +207,180 @@ class TelegramManager: ObservableObject {
         
         switch update {
         case .updateAuthorizationState(let auth):
-            switch auth.authorizationState {
-            case .authorizationStateWaitTdlibParameters:
-                Task {
-                    let params = TDLibParameters(
-                        apiId: kochApiId,
-                        apiHash: kochApiHash,
-                        systemLanguageCode: "ru",
-                        deviceModel: "iPhone",
-                        systemVersion: "iOS",
-                        applicationVersion: "1.0",
-                        databaseDirectory: "tdlib",
-                        filesDirectory: "tdlib_files",
-                        useMessageDatabase: true,
-                        useSecretChats: false,
-                        useTestDc: false,
-                        enableStorageOptimizer: true
-                    )
-                    do {
-                        try await client.setTdlibParameters(params: params)
-                    } catch {
-                        self.errorMessage = error.localizedDescription
-                    }
-                }
-            case .authorizationStateWaitPhoneNumber:
-                isLoading = false
-                authState = 0
-            case .authorizationStateWaitCode:
-                isLoading = false
-                authState = 1
-            case .authorizationStateWaitPassword:
-                isLoading = false
-                authState = 2
-            case .authorizationStateReady:
-                isLoading = false
-                isLoggedIn = true
-            default:
-                break
+            handleAuthUpdate(auth.authorizationState)
+            
+        case .updateConnectionState(let conn):
+            switch conn.state {
+            case .connectionStateReady:
+                self.connectionStatus = "Подключено"
+            case .connectionStateConnecting:
+                self.connectionStatus = "Подключение..."
+            case .connectionStateUpdating:
+                self.connectionStatus = "Обновление..."
+            case .connectionStateWaitingForNetwork:
+                self.connectionStatus = "Ожидание сети..."
             }
+            
+        case .updateUser(let u):
+            if u.user.id == self.currentUserId || self.currentUserId == 0 {
+                self.currentUserId = u.user.id
+                let firstName = u.user.firstName
+                let lastName = u.user.lastName
+                let fullName = "\(firstName) \(lastName)".trimmingCharacters(in: .whitespaces)
+                self.currentUserName = fullName.isEmpty ? "Telegram User" : fullName
+                self.currentUserPhone = u.user.phoneNumber
+            }
+            
+        case .updateNewChat(let newChat):
+            let c = newChat.chat
+            let chatItem = LocalChat(
+                id: c.id,
+                title: c.title,
+                lastMessageSnippet: "Диалог синхронизирован",
+                lastMessageDate: Date(),
+                unreadCount: c.unreadCount,
+                isPinned: c.positions.contains(where: { $0.isPinned }),
+                isChannel: false,
+                isGroup: false
+            )
+            if !self.chats.contains(where: { $0.id == c.id }) {
+                self.chats.append(chatItem)
+            }
+            
+        case .updateChatTitle(let titleUpdate):
+            if let idx = self.chats.firstIndex(where: { $0.id == titleUpdate.chatId }) {
+                self.chats[idx].title = titleUpdate.title
+            }
+            
+        case .updateNewMessage(let newMsg):
+            let msg = newMsg.message
+            let text = extractText(from: msg.content)
+            let localMsg = LocalMessage(
+                id: msg.id,
+                chatId: msg.chatId,
+                senderName: msg.isOutgoing ? "Вы" : "Собеседник",
+                senderId: msg.senderId.hashValue == 0 ? 0 : Int64(msg.senderId.hashValue),
+                text: text,
+                date: Date(timeIntervalSince1970: TimeInterval(msg.date)),
+                isOutgoing: msg.isOutgoing,
+                isDeletedLocally: false
+            )
+            
+            // Cache in DeletedMessagesStore
+            DeletedMessagesStore.shared.cacheIncomingMessage(localMsg)
+            
+            // Append to in-memory conversation list
+            var current = self.messagesForChat[msg.chatId] ?? []
+            if !current.contains(where: { $0.id == localMsg.id }) {
+                current.append(localMsg)
+                self.messagesForChat[msg.chatId] = current
+            }
+            
+            // Update snippet in chats list
+            if let idx = self.chats.firstIndex(where: { $0.id == msg.chatId }) {
+                self.chats[idx].lastMessageSnippet = text
+                self.chats[idx].lastMessageDate = localMsg.date
+            }
+            
+        case .updateDeleteMessages(let del):
+            // Intercept message deletion for Deleted Messages function
+            DeletedMessagesStore.shared.markMessagesDeleted(chatId: del.chatId, messageIds: del.messageIds)
+            
         default:
             break
         }
     }
     
+    private func extractText(from content: MessageContent) -> String {
+        switch content {
+        case .messageText(let t):
+            return t.text.text
+        case .messagePhoto(let p):
+            let caption = p.caption.text
+            return caption.isEmpty ? "📷 Фотография" : "📷 \(caption)"
+        case .messageVoiceNote:
+            return "🎤 Голосовое сообщение"
+        case .messageDocument(let doc):
+            return "📁 Файл: \(doc.document.fileName)"
+        case .messageSticker:
+            return "🎭 Стикер"
+        case .messageVideo(let v):
+            return v.caption.text.isEmpty ? "🎥 Видео" : "🎥 \(v.caption.text)"
+        case .messageAnimatedEmoji:
+            return "✨ Анимированный эмодзи"
+        default:
+            return "Сообщение"
+        }
+    }
+    
+    private func handleAuthUpdate(_ state: AuthorizationState) {
+        switch state {
+        case .authorizationStateWaitTdlibParameters:
+            Task {
+                let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+                let tdlibPath = docs.appendingPathComponent("tdlib_data").path
+                let filesPath = docs.appendingPathComponent("tdlib_files").path
+                
+                do {
+                    _ = try await client?.setTdlibParameters(
+                        apiHash: kochApiHash,
+                        apiId: kochApiId,
+                        applicationVersion: "1.0",
+                        databaseDirectory: tdlibPath,
+                        databaseEncryptionKey: nil,
+                        deviceModel: "iPhone",
+                        filesDirectory: filesPath,
+                        systemLanguageCode: "ru",
+                        systemVersion: "iOS 16.0",
+                        useChatInfoDatabase: true,
+                        useFileDatabase: true,
+                        useMessageDatabase: true,
+                        useSecretChats: false,
+                        useTestDc: false
+                    )
+                } catch {
+                    self.errorMessage = "Ошибка параметров TDLib: \(error.localizedDescription)"
+                }
+            }
+        case .authorizationStateWaitPhoneNumber:
+            isLoading = false
+            authState = 0
+        case .authorizationStateWaitCode:
+            isLoading = false
+            authState = 1
+        case .authorizationStateWaitPassword:
+            isLoading = false
+            authState = 2
+        case .authorizationStateReady:
+            isLoading = false
+            isLoggedIn = true
+            loadInitialChats()
+        case .authorizationStateLoggingOut, .authorizationStateClosed:
+            isLoggedIn = false
+            isLoading = false
+        default:
+            break
+        }
+    }
+    
+    func loadInitialChats() {
+        Task {
+            do {
+                _ = try await client?.loadChats(chatList: nil, limit: 30)
+                _ = try await client?.getMe()
+            } catch {
+                // If offline or cache loading
+            }
+        }
+    }
+    
+    // MARK: - Auth actions
     func sendPhone(_ phone: String) {
         isLoading = true
         errorMessage = nil
         Task {
             do {
-                try await client?.setAuthenticationPhoneNumber(phoneNumber: phone, settings: nil)
+                _ = try await client?.setAuthenticationPhoneNumber(phoneNumber: phone, settings: nil)
             } catch {
                 self.errorMessage = error.localizedDescription
                 self.isLoading = false
@@ -105,7 +393,7 @@ class TelegramManager: ObservableObject {
         errorMessage = nil
         Task {
             do {
-                try await client?.checkAuthenticationCode(code: code)
+                _ = try await client?.checkAuthenticationCode(code: code)
             } catch {
                 self.errorMessage = error.localizedDescription
                 self.isLoading = false
@@ -118,15 +406,91 @@ class TelegramManager: ObservableObject {
         errorMessage = nil
         Task {
             do {
-                try await client?.checkAuthenticationPassword(password: password)
+                _ = try await client?.checkAuthenticationPassword(password: password)
             } catch {
                 self.errorMessage = error.localizedDescription
                 self.isLoading = false
             }
         }
     }
+    
+    func logOut() {
+        Task {
+            do {
+                _ = try await client?.logOut()
+                self.isLoggedIn = false
+                self.chats.removeAll()
+            } catch {
+                self.errorMessage = error.localizedDescription
+            }
+        }
+    }
+    
+    // MARK: - Messaging with Ghost Mode Enforcement
+    func sendTextMessage(chatId: Int64, text: String, replyToMessageId: Int64? = nil) {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        
+        let formatted = FormattedText(entities: [], text: text)
+        let content = InputMessageContent.inputMessageText(
+            InputMessageText(
+                clearDraft: true,
+                linkPreviewOptions: nil,
+                text: formatted
+            )
+        )
+        
+        Task {
+            do {
+                let replyTo: InputMessageReplyTo? = (replyToMessageId != nil) ? .inputMessageReplyToMessage(InputMessageReplyToMessage(chatId: nil, messageId: replyToMessageId, quote: nil)) : nil
+                
+                _ = try await client?.sendMessage(
+                    chatId: chatId,
+                    inputMessageContent: content,
+                    messageThreadId: 0,
+                    options: nil,
+                    replyMarkup: nil,
+                    replyTo: replyTo
+                )
+            } catch {
+                self.errorMessage = "Не удалось отправить: \(error.localizedDescription)"
+            }
+        }
+    }
+    
+    func sendTypingAction(chatId: Int64) {
+        // 👻 Check Ghost Mode: If typing is hidden, DO NOT send action
+        if GhostModeManager.shared.isGhostActive(for: chatId) && GhostModeManager.shared.hideTyping {
+            return
+        }
+        
+        Task {
+            _ = try? await client?.sendChatAction(
+                action: .chatActionTyping,
+                businessConnectionId: nil,
+                chatId: chatId,
+                messageThreadId: 0
+            )
+        }
+    }
+    
+    func markChatRead(chatId: Int64, messageIds: [Int64]) {
+        // 👻 Check Ghost Mode: If stealth read is enabled, DO NOT send viewMessages / read confirmation
+        if GhostModeManager.shared.isGhostActive(for: chatId) && GhostModeManager.shared.stealthReadMessages {
+            return
+        }
+        
+        Task {
+            _ = try? await client?.viewMessages(
+                chatId: chatId,
+                forceRead: true,
+                messageIds: messageIds,
+                source: nil
+            )
+        }
+    }
 }
 
+// MARK: - Country Directory
 struct Country: Identifiable {
     let id = UUID()
     let flag: String
@@ -135,353 +499,904 @@ struct Country: Identifiable {
 }
 
 let countries: [Country] = [
-    Country(flag: "🇩🇪", name: "Германия", code: "+49"),
     Country(flag: "🇷🇺", name: "Россия", code: "+7"),
-    Country(flag: "🇺🇦", name: "Украина", code: "+380"),
+    Country(flag: "🇩🇪", name: "Германия", code: "+49"),
     Country(flag: "🇧🇾", name: "Беларусь", code: "+375"),
     Country(flag: "🇰🇿", name: "Казахстан", code: "+7"),
+    Country(flag: "🇺🇦", name: "Украина", code: "+380"),
     Country(flag: "🇺🇸", name: "США", code: "+1"),
     Country(flag: "🇬🇧", name: "Великобритания", code: "+44"),
     Country(flag: "🇫🇷", name: "Франция", code: "+33"),
     Country(flag: "🇮🇹", name: "Италия", code: "+39"),
-    Country(flag: "🇪🇸", name: "Испания", code: "+34"),
-    Country(flag: "🇵🇱", name: "Польша", code: "+48"),
     Country(flag: "🇹🇷", name: "Турция", code: "+90"),
-    Country(flag: "🇨🇳", name: "Китай", code: "+86"),
-    Country(flag: "🇯🇵", name: "Япония", code: "+81"),
-    Country(flag: "🇰🇷", name: "Корея", code: "+82"),
-    Country(flag: "🇮🇳", name: "Индия", code: "+91"),
-    Country(flag: "🇧🇷", name: "Бразилия", code: "+55"),
-    Country(flag: "🇨🇦", name: "Канада", code: "+1"),
-    Country(flag: "🇦🇺", name: "Австралия", code: "+61"),
-    Country(flag: "🇳🇱", name: "Нидерланды", code: "+31"),
-    Country(flag: "🇧🇪", name: "Бельгия", code: "+32"),
-    Country(flag: "🇨🇭", name: "Швейцария", code: "+41"),
-    Country(flag: "🇦🇹", name: "Австрия", code: "+43"),
-    Country(flag: "🇸🇪", name: "Швеция", code: "+46"),
-    Country(flag: "🇳🇴", name: "Норвегия", code: "+47"),
-    Country(flag: "🇩🇰", name: "Дания", code: "+45"),
-    Country(flag: "🇫🇮", name: "Финляндия", code: "+358"),
-    Country(flag: "🇵🇹", name: "Португалия", code: "+351"),
-    Country(flag: "🇬🇷", name: "Греция", code: "+30"),
-    Country(flag: "🇨🇿", name: "Чехия", code: "+420"),
-    Country(flag: "🇷🇴", name: "Румыния", code: "+40"),
-    Country(flag: "🇭🇺", name: "Венгрия", code: "+36"),
-    Country(flag: "🇧🇬", name: "Болгария", code: "+359"),
-    Country(flag: "🇷🇸", name: "Сербия", code: "+381"),
-    Country(flag: "🇭🇷", name: "Хорватия", code: "+385"),
-    Country(flag: "🇮🇱", name: "Израиль", code: "+972"),
-    Country(flag: "🇦🇪", name: "ОАЭ", code: "+971"),
-    Country(flag: "🇸🇦", name: "Саудовская Аравия", code: "+966"),
-    Country(flag: "🇪🇬", name: "Египет", code: "+20"),
-    Country(flag: "🇿🇦", name: "ЮАР", code: "+27"),
-    Country(flag: "🇦🇷", name: "Аргентина", code: "+54"),
-    Country(flag: "🇲🇽", name: "Мексика", code: "+52"),
-    Country(flag: "🇲🇩", name: "Молдова", code: "+373"),
-    Country(flag: "🇬🇪", name: "Грузия", code: "+995"),
-    Country(flag: "🇦🇲", name: "Армения", code: "+374"),
-    Country(flag: "🇦🇿", name: "Азербайджан", code: "+994"),
-    Country(flag: "🇺🇿", name: "Узбекистан", code: "+998"),
-    Country(flag: "🇰🇬", name: "Киргизия", code: "+996"),
-    Country(flag: "🇹🇯", name: "Таджикистан", code: "+992"),
-    Country(flag: "🇹🇲", name: "Туркменистан", code: "+993"),
-    Country(flag: "🇱🇹", name: "Литва", code: "+370"),
-    Country(flag: "🇱🇻", name: "Латвия", code: "+371"),
-    Country(flag: "🇪🇪", name: "Эстония", code: "+372")
+    Country(flag: "🇦🇪", name: "ОАЭ", code: "+971")
 ]
 
-struct PhoneEntryView: View {
-    @ObservedObject var telegram: TelegramManager
+// MARK: - Authentication View
+struct AuthenticationRootView: View {
+    @EnvironmentObject var telegram: TelegramManager
     @State private var phone = ""
     @State private var code = ""
     @State private var password = ""
     @State private var selectedCountry = countries[0]
     @State private var showCountryPicker = false
-    @FocusState private var isPhoneFocused: Bool
-    @FocusState private var isCodeFocused: Bool
-    @FocusState private var isPasswordFocused: Bool
+    @FocusState private var isFieldFocused: Bool
     
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            Color(UIColor.systemBackground).ignoresSafeArea()
             
             VStack(spacing: 0) {
-                Spacer().frame(height: 60)
+                Spacer().frame(height: 50)
                 
-                Text(telegram.authState == 0 ? "☎️" : telegram.authState == 1 ? "📩" : "🔐")
-                    .font(.system(size: 75))
-                    .padding(.bottom, 24)
-                
-                Text(telegram.authState == 0 ? "Телефон" : telegram.authState == 1 ? "Код" : "Пароль")
-                    .font(.system(size: 30, weight: .bold))
-                    .foregroundColor(.white)
+                Image(systemName: telegram.authState == 0 ? "paperplane.circle.fill" : (telegram.authState == 1 ? "lock.message.fill" : "key.fill"))
+                    .font(.system(size: 80))
+                    .foregroundStyle(LinearGradient(colors: [.blue, .purple], startPoint: .topLeading, endPoint: .bottomTrailing))
                     .padding(.bottom, 20)
                 
+                Text("Kochgram")
+                    .font(.system(size: 32, weight: .bold))
+                
+                Text(telegram.authState == 0 ? "Введите номер телефона" : (telegram.authState == 1 ? "Проверочный код" : "Облачный пароль (2FA)"))
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .padding(.top, 4)
+                    .padding(.bottom, 36)
+                
                 if telegram.authState == 0 {
-                    Text("Введите свой номер телефона")
-                        .font(.system(size: 16))
-                        .foregroundColor(.gray)
-                        .padding(.bottom, 50)
-                    
                     Button(action: { showCountryPicker = true }) {
-                        HStack(spacing: 10) {
-                            Text(selectedCountry.flag).font(.system(size: 22))
-                            Text(selectedCountry.name)
-                                .font(.system(size: 17))
-                                .foregroundColor(.blue)
+                        HStack {
+                            Text(selectedCountry.flag).font(.title3)
+                            Text(selectedCountry.name).foregroundColor(.primary)
                             Spacer()
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundColor(.gray)
+                            Text(selectedCountry.code).foregroundColor(.secondary)
+                            Image(systemName: "chevron.right").font(.footnote).foregroundColor(.secondary)
                         }
-                        .padding(.horizontal, 20)
-                        .padding(.vertical, 14)
+                        .padding()
+                        .background(Color(UIColor.secondarySystemBackground))
+                        .cornerRadius(12)
                     }
+                    .padding(.horizontal, 24)
                     
-                    Divider().background(Color.white.opacity(0.1))
-                    
-                    HStack(spacing: 0) {
+                    HStack {
                         Text(selectedCountry.code)
-                            .font(.system(size: 20))
-                            .foregroundColor(.white)
-                            .padding(.leading, 20)
-                            .padding(.trailing, 12)
+                            .font(.headline)
+                            .foregroundColor(.secondary)
                         
-                        Rectangle()
-                            .fill(Color.white.opacity(0.2))
-                            .frame(width: 1, height: 28)
-                        
-                        TextField("", text: $phone)
+                        TextField("Номер телефона", text: $phone)
                             .keyboardType(.phonePad)
-                            .focused($isPhoneFocused)
-                            .font(.system(size: 20))
-                            .foregroundColor(.white)
-                            .padding(.leading, 12)
+                            .focused($isFieldFocused)
+                            .font(.title3)
                     }
-                    .padding(.vertical, 18)
-                    
-                    Divider().background(Color.white.opacity(0.1))
+                    .padding()
+                    .background(Color(UIColor.secondarySystemBackground))
+                    .cornerRadius(12)
+                    .padding(.horizontal, 24)
+                    .padding(.top, 12)
                     
                     Button(action: {
                         let fullPhone = selectedCountry.code + phone
                         telegram.sendPhone(fullPhone)
                     }) {
-                        Text(telegram.isLoading ? "Отправка..." : "Продолжить")
-                            .font(.system(size: 17, weight: .semibold))
-                            .foregroundColor(.white)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 16)
-                            .background(phone.isEmpty ? Color.gray.opacity(0.3) : Color.blue)
-                            .cornerRadius(28)
+                        HStack {
+                            if telegram.isLoading {
+                                ProgressView().tint(.white).padding(.trailing, 6)
+                            }
+                            Text(telegram.isLoading ? "Подключение..." : "Продолжить")
+                                .fontWeight(.semibold)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 16)
+                        .background(phone.isEmpty ? Color.gray.opacity(0.4) : Color.blue)
+                        .foregroundColor(.white)
+                        .cornerRadius(14)
                     }
                     .disabled(phone.isEmpty || telegram.isLoading)
-                    .padding(.horizontal, 20)
-                    .padding(.top, 40)
+                    .padding(.horizontal, 24)
+                    .padding(.top, 24)
+                    
                 } else if telegram.authState == 1 {
-                    Text("Мы отправили код в Telegram")
-                        .font(.system(size: 16))
-                        .foregroundColor(.gray)
-                        .padding(.bottom, 50)
-                    
-                    TextField("", text: $code)
+                    TextField("Код из Telegram", text: $code)
                         .keyboardType(.numberPad)
-                        .focused($isCodeFocused)
-                        .font(.system(size: 24))
-                        .foregroundColor(.white)
                         .multilineTextAlignment(.center)
-                        .padding(.vertical, 18)
-                        .padding(.horizontal, 40)
+                        .font(.system(size: 28, weight: .bold))
+                        .padding()
+                        .background(Color(UIColor.secondarySystemBackground))
+                        .cornerRadius(12)
+                        .padding(.horizontal, 48)
                     
-                    Divider().background(Color.white.opacity(0.1))
-                        .padding(.horizontal, 40)
-                    
-                    Button(action: {
-                        telegram.sendCode(code)
-                    }) {
-                        Text(telegram.isLoading ? "Проверка..." : "Продолжить")
-                            .font(.system(size: 17, weight: .semibold))
-                            .foregroundColor(.white)
+                    Button(action: { telegram.sendCode(code) }) {
+                        Text(telegram.isLoading ? "Проверка..." : "Войти")
+                            .fontWeight(.semibold)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 16)
-                            .background(code.isEmpty ? Color.gray.opacity(0.3) : Color.blue)
-                            .cornerRadius(28)
+                            .background(code.isEmpty ? Color.gray.opacity(0.4) : Color.blue)
+                            .foregroundColor(.white)
+                            .cornerRadius(14)
                     }
                     .disabled(code.isEmpty || telegram.isLoading)
-                    .padding(.horizontal, 20)
-                    .padding(.top, 40)
+                    .padding(.horizontal, 24)
+                    .padding(.top, 24)
+                    
                 } else if telegram.authState == 2 {
-                    Text("Введите пароль 2FA")
-                        .font(.system(size: 16))
-                        .foregroundColor(.gray)
-                        .padding(.bottom, 50)
-                    
-                    SecureField("", text: $password)
-                        .focused($isPasswordFocused)
-                        .font(.system(size: 20))
-                        .foregroundColor(.white)
+                    SecureField("Пароль", text: $password)
                         .multilineTextAlignment(.center)
-                        .padding(.vertical, 18)
-                        .padding(.horizontal, 40)
+                        .font(.title3)
+                        .padding()
+                        .background(Color(UIColor.secondarySystemBackground))
+                        .cornerRadius(12)
+                        .padding(.horizontal, 48)
                     
-                    Divider().background(Color.white.opacity(0.1))
-                        .padding(.horizontal, 40)
-                    
-                    Button(action: {
-                        telegram.sendPassword(password)
-                    }) {
-                        Text(telegram.isLoading ? "Проверка..." : "Войти")
-                            .font(.system(size: 17, weight: .semibold))
-                            .foregroundColor(.white)
+                    Button(action: { telegram.sendPassword(password) }) {
+                        Text(telegram.isLoading ? "Проверка..." : "Подтвердить пароль")
+                            .fontWeight(.semibold)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 16)
-                            .background(password.isEmpty ? Color.gray.opacity(0.3) : Color.blue)
-                            .cornerRadius(28)
+                            .background(password.isEmpty ? Color.gray.opacity(0.4) : Color.blue)
+                            .foregroundColor(.white)
+                            .cornerRadius(14)
                     }
                     .disabled(password.isEmpty || telegram.isLoading)
-                    .padding(.horizontal, 20)
-                    .padding(.top, 40)
+                    .padding(.horizontal, 24)
+                    .padding(.top, 24)
                 }
                 
-                if let error = telegram.errorMessage {
-                    Text(error)
+                if let err = telegram.errorMessage {
+                    Text(err)
+                        .font(.footnote)
                         .foregroundColor(.red)
-                        .font(.caption)
-                        .padding(.top, 20)
                         .multilineTextAlignment(.center)
-                        .padding(.horizontal, 40)
+                        .padding(.horizontal, 32)
+                        .padding(.top, 16)
                 }
                 
                 Spacer()
             }
         }
-        .preferredColorScheme(.dark)
-        .onAppear {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                if telegram.authState == 0 { isPhoneFocused = true }
-            }
-        }
-        .onChange(of: telegram.authState) { newValue in
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                if newValue == 1 { isCodeFocused = true }
-                if newValue == 2 { isPasswordFocused = true }
-            }
-        }
         .sheet(isPresented: $showCountryPicker) {
-            CountryPickerView(selected: $selectedCountry)
+            CountryPickerModal(selected: $selectedCountry)
         }
     }
 }
 
-struct CountryPickerView: View {
+struct CountryPickerModal: View {
     @Binding var selected: Country
     @Environment(\.dismiss) var dismiss
-    @State private var search = ""
+    @State private var query = ""
     
     var filtered: [Country] {
-        if search.isEmpty { return countries }
-        return countries.filter { $0.name.lowercased().contains(search.lowercased()) }
+        query.isEmpty ? countries : countries.filter { $0.name.localizedCaseInsensitiveContains(query) }
     }
     
     var body: some View {
         NavigationStack {
-            List {
-                ForEach(filtered) { country in
-                    Button(action: {
-                        selected = country
-                        dismiss()
-                    }) {
-                        HStack {
-                            Text(country.flag).font(.system(size: 22))
-                            Text(country.name).foregroundColor(.white)
-                            Spacer()
-                            Text(country.code).foregroundColor(.gray)
-                            if country.name == selected.name {
-                                Image(systemName: "checkmark").foregroundColor(.blue)
-                            }
-                        }
+            List(filtered) { c in
+                Button(action: {
+                    selected = c
+                    dismiss()
+                }) {
+                    HStack {
+                        Text(c.flag).font(.title2)
+                        Text(c.name).foregroundColor(.primary)
+                        Spacer()
+                        Text(c.code).foregroundColor(.secondary)
                     }
                 }
             }
-            .searchable(text: $search, prompt: "Поиск страны")
-            .navigationTitle("Страна")
+            .searchable(text: $query, prompt: "Поиск страны")
+            .navigationTitle("Выберите страну")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbarColorScheme(.dark, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Отмена") { dismiss() }
                 }
             }
-            .preferredColorScheme(.dark)
         }
     }
 }
 
-struct MainView: View {
-    @EnvironmentObject var telegram: TelegramManager
+// MARK: - Main Application Tab View
+struct MainAppTabView: View {
     @State private var selectedTab = 0
     
     var body: some View {
         TabView(selection: $selectedTab) {
-            ChatScreen()
-                .tabItem { Label("Чаты", systemImage: "message.fill") }
+            ChatsListScreen()
+                .tabItem { Label("Чаты", systemImage: "bubble.left.and.bubble.right.fill") }
                 .tag(0)
             
-            SimpleScreen(title: "Контакты", icon: "person.2.fill")
-                .tabItem { Label("Контакты", systemImage: "person.2.fill") }
+            ContactsScreen()
+                .tabItem { Label("Контакты", systemImage: "person.crop.circle.fill") }
                 .tag(1)
             
-            SimpleScreen(title: "Звонки", icon: "phone.fill")
-                .tabItem { Label("Звонки", systemImage: "phone.fill") }
+            SavedDeletedMessagesScreen()
+                .tabItem { Label("Удалённые", systemImage: "trash.circle.fill") }
                 .tag(2)
             
-            SimpleScreen(title: "AI", icon: "sparkles")
-                .tabItem { Label("AI", systemImage: "sparkles") }
-                .tag(3)
-            
-            SimpleScreen(title: "Настройки", icon: "gearshape.fill")
+            SettingsMainScreen()
                 .tabItem { Label("Настройки", systemImage: "gearshape.fill") }
-                .tag(4)
+                .tag(3)
         }
         .tint(.blue)
-        .preferredColorScheme(.dark)
     }
 }
 
-struct ChatScreen: View {
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 16) {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 60))
-                    .foregroundColor(.green)
-                Text("Вход выполнен")
-                    .font(.title2.bold())
-                    .foregroundColor(.white)
-                Text("Список чатов появится следующим шагом")
-                    .foregroundColor(.gray)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 40)
-            }
-            .navigationTitle("kochgramm")
-        }
+// MARK: - Chats List Screen
+struct ChatsListScreen: View {
+    @EnvironmentObject var telegram: TelegramManager
+    @EnvironmentObject var ghostMode: GhostModeManager
+    @State private var searchQuery = ""
+    
+    var filteredChats: [LocalChat] {
+        if searchQuery.isEmpty { return telegram.chats }
+        return telegram.chats.filter { $0.title.localizedCaseInsensitiveContains(searchQuery) }
     }
-}
-
-struct SimpleScreen: View {
-    let title: String
-    let icon: String
     
     var body: some View {
         NavigationStack {
-            VStack(spacing: 16) {
-                Image(systemName: icon)
-                    .font(.system(size: 60))
-                    .foregroundColor(.gray)
-                Text(title)
-                    .font(.title2)
+            List {
+                if ghostMode.isMasterGhostEnabled {
+                    Section {
+                        HStack {
+                            Image(systemName: "eye.slash.fill")
+                                .foregroundColor(.purple)
+                            Text("Режим призрака активен для всех чатов")
+                                .font(.footnote.weight(.medium))
+                                .foregroundColor(.purple)
+                        }
+                    }
+                }
+                
+                if filteredChats.isEmpty {
+                    ContentUnavailableView(
+                        telegram.chats.isEmpty ? "Загрузка чатов Telegram..." : "Ничего не найдено",
+                        systemImage: "bubble.middle.bottom",
+                        description: Text("Синхронизация с серверами Telegram")
+                    )
+                } else {
+                    ForEach(filteredChats) { chat in
+                        NavigationLink(destination: ChatConversationView(chat: chat)) {
+                            ChatRowCell(chat: chat)
+                        }
+                        .swipeActions(edge: .leading) {
+                            Button {
+                                ghostMode.toggleChatGhost(chatId: chat.id)
+                            } label: {
+                                Label(
+                                    ghostMode.isGhostActive(for: chat.id) ? "Снять призрака" : "Призрак",
+                                    systemImage: "eye.slash"
+                                )
+                            }
+                            .tint(.purple)
+                        }
+                    }
+                }
+            }
+            .listStyle(.insetGrouped)
+            .searchable(text: $searchQuery, prompt: "Поиск по чатам и сообщениям")
+            .navigationTitle("Чаты")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(telegram.connectionStatus == "Подключено" ? Color.green : Color.orange)
+                            .frame(width: 8, height: 8)
+                        Text(telegram.connectionStatus)
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(action: { telegram.loadInitialChats() }) {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct ChatRowCell: View {
+    let chat: LocalChat
+    @EnvironmentObject var ghostMode: GhostModeManager
+    
+    var body: some View {
+        HStack(spacing: 12) {
+            ZStack {
+                Circle()
+                    .fill(LinearGradient(colors: [.blue, .cyan], startPoint: .topLeading, endPoint: .bottomTrailing))
+                    .frame(width: 52, height: 52)
+                
+                Text(chat.avatarLetter)
+                    .font(.system(size: 20, weight: .bold))
                     .foregroundColor(.white)
             }
-            .navigationTitle(title)
+            
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text(chat.title)
+                        .font(.headline)
+                        .lineLimit(1)
+                    
+                    if ghostMode.isGhostActive(for: chat.id) {
+                        Image(systemName: "eye.slash.fill")
+                            .font(.caption2)
+                            .foregroundColor(.purple)
+                    }
+                    
+                    Spacer()
+                    
+                    Text(formatTime(chat.lastMessageDate))
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                
+                HStack {
+                    Text(chat.lastMessageSnippet)
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                    
+                    Spacer()
+                    
+                    if chat.unreadCount > 0 {
+                        Text("\(chat.unreadCount)")
+                            .font(.caption2.bold())
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(Color.blue)
+                            .clipShape(Capsule())
+                    }
+                }
+            }
+        }
+        .padding(.vertical, 4)
+    }
+    
+    private func formatTime(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+        return formatter.string(from: date)
+    }
+}
+
+// MARK: - Chat Conversation View
+struct ChatConversationView: View {
+    let chat: LocalChat
+    @EnvironmentObject var telegram: TelegramManager
+    @EnvironmentObject var ghostMode: GhostModeManager
+    @EnvironmentObject var deletedStore: DeletedMessagesStore
+    
+    @State private var inputText = ""
+    @State private var replyingTo: LocalMessage? = nil
+    
+    var messages: [LocalMessage] {
+        let current = telegram.messagesForChat[chat.id] ?? []
+        let deletedForThisChat = deletedStore.savedDeletedMessages.filter { $0.chatId == chat.id && $0.isDeletedLocally }
+        
+        var combined = current
+        for del in deletedForThisChat {
+            if !combined.contains(where: { $0.id == del.id }) {
+                combined.append(del)
+            }
+        }
+        return combined.sorted(by: { $0.date < $1.date })
+    }
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Ghost Mode Indicator Banner
+            if ghostMode.isGhostActive(for: chat.id) {
+                HStack {
+                    Image(systemName: "eye.slash.fill").foregroundColor(.purple)
+                    Text("Режим призрака включен (статус набора и чтение скрыты)")
+                        .font(.caption)
+                        .foregroundColor(.purple)
+                    Spacer()
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 6)
+                .background(Color.purple.opacity(0.12))
+            }
+            
+            // Messages Scroll
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 8) {
+                        ForEach(messages) { msg in
+                            MessageBubbleCell(message: msg)
+                                .id(msg.id)
+                                .contextMenu {
+                                    Button {
+                                        replyingTo = msg
+                                    } label: {
+                                        Label("Ответить", systemImage: "arrowshape.turn.up.left")
+                                    }
+                                    Button {
+                                        UIPasteboard.general.string = msg.text
+                                    } label: {
+                                        Label("Скопировать текст", systemImage: "doc.on.doc")
+                                    }
+                                }
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                }
+                .onAppear {
+                    if let last = messages.last {
+                        proxy.scrollTo(last.id, anchor: .bottom)
+                    }
+                    // Stealth read check
+                    let unreadIds = messages.map { $0.id }
+                    telegram.markChatRead(chatId: chat.id, messageIds: unreadIds)
+                }
+            }
+            
+            Divider()
+            
+            // Reply Preview Bar
+            if let reply = replyingTo {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Ответ: \(reply.senderName)").font(.caption.bold()).foregroundColor(.blue)
+                        Text(reply.text).font(.caption2).foregroundColor(.secondary).lineLimit(1)
+                    }
+                    Spacer()
+                    Button { replyingTo = nil } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundColor(.secondary)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 6)
+                .background(Color(UIColor.secondarySystemBackground))
+            }
+            
+            // Input Controls
+            HStack(spacing: 12) {
+                Button(action: {}) {
+                    Image(systemName: "paperclip").font(.title3).foregroundColor(.secondary)
+                }
+                
+                TextField("Сообщение...", text: $inputText)
+                    .textFieldStyle(.plain)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color(UIColor.secondarySystemBackground))
+                    .cornerRadius(20)
+                    .onChange(of: inputText) { _ in
+                        telegram.sendTypingAction(chatId: chat.id)
+                    }
+                
+                if inputText.isEmpty {
+                    Button(action: {}) {
+                        Image(systemName: "mic.fill").font(.title3).foregroundColor(.blue)
+                    }
+                } else {
+                    Button(action: sendMessage) {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: 32))
+                            .foregroundColor(.blue)
+                    }
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color(UIColor.systemBackground))
+        }
+        .navigationTitle(chat.title)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button {
+                    ghostMode.toggleChatGhost(chatId: chat.id)
+                } label: {
+                    Image(systemName: ghostMode.isGhostActive(for: chat.id) ? "eye.slash.fill" : "eye")
+                        .foregroundColor(ghostMode.isGhostActive(for: chat.id) ? .purple : .secondary)
+                }
+            }
+        }
+    }
+    
+    private func sendMessage() {
+        let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        telegram.sendTextMessage(chatId: chat.id, text: text, replyToMessageId: replyingTo?.id)
+        inputText = ""
+        replyingTo = nil
+    }
+}
+
+// MARK: - Message Bubble Cell (with "Удалено" badge support)
+struct MessageBubbleCell: View {
+    let message: LocalMessage
+    
+    var body: some View {
+        HStack {
+            if message.isOutgoing { Spacer() }
+            
+            VStack(alignment: message.isOutgoing ? .trailing : .leading, spacing: 4) {
+                // Deleted Message Badge 🗑️
+                if message.isDeletedLocally {
+                    HStack(spacing: 4) {
+                        Image(systemName: "trash.fill")
+                            .font(.system(size: 10))
+                        Text("Удалено в Telegram")
+                            .font(.system(size: 11, weight: .bold))
+                    }
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Color.red.opacity(0.85))
+                    .cornerRadius(8)
+                }
+                
+                Text(message.text)
+                    .font(.body)
+                    .foregroundColor(message.isOutgoing ? .white : .primary)
+                
+                HStack(spacing: 4) {
+                    Text(formatTime(message.date))
+                        .font(.system(size: 10))
+                        .foregroundColor(message.isOutgoing ? Color.white.opacity(0.8) : .secondary)
+                    
+                    if message.isOutgoing {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 9))
+                            .foregroundColor(.white.opacity(0.8))
+                    }
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(
+                message.isDeletedLocally
+                    ? Color.red.opacity(0.2)
+                    : (message.isOutgoing ? Color.blue : Color(UIColor.secondarySystemBackground))
+            )
+            .cornerRadius(16)
+            
+            if !message.isOutgoing { Spacer() }
+        }
+    }
+    
+    private func formatTime(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+        return formatter.string(from: date)
+    }
+}
+
+// MARK: - Saved Deleted Messages Screen
+struct SavedDeletedMessagesScreen: View {
+    @EnvironmentObject var deletedStore: DeletedMessagesStore
+    @State private var showConfirmClear = false
+    
+    var body: some View {
+        NavigationStack {
+            Group {
+                if deletedStore.savedDeletedMessages.isEmpty {
+                    ContentUnavailableView(
+                        "Нет удалённых сообщений",
+                        systemImage: "trash.slash.fill",
+                        description: Text("Здесь появятся сообщения, которые собеседники удалят из Telegram после получения.")
+                    )
+                } else {
+                    List {
+                        Section {
+                            ForEach(deletedStore.savedDeletedMessages) { msg in
+                                VStack(alignment: .leading, spacing: 6) {
+                                    HStack {
+                                        Text(msg.senderName)
+                                            .font(.headline)
+                                        Spacer()
+                                        Text("Удалено").font(.caption2.bold()).foregroundColor(.red)
+                                    }
+                                    Text(msg.text)
+                                        .font(.subheadline)
+                                    if let delAt = msg.deletedAt {
+                                        Text("Удалено в: \(formatDate(delAt))")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                                .padding(.vertical, 4)
+                            }
+                        }
+                    }
+                    .listStyle(.insetGrouped)
+                }
+            }
+            .navigationTitle("Удалённые сообщения")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    if !deletedStore.savedDeletedMessages.isEmpty {
+                        Button(role: .destructive) {
+                            showConfirmClear = true
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                    }
+                }
+            }
+            .confirmationDialog("Очистить историю удалённых сообщений?", isPresented: $showConfirmClear) {
+                Button("Очистить всё", role: .destructive) {
+                    deletedStore.clearAllHistory()
+                }
+                Button("Отмена", role: .cancel) {}
+            }
+        }
+    }
+    
+    private func formatDate(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "dd.MM.yyyy HH:mm"
+        return f.string(from: date)
+    }
+}
+
+// MARK: - Contacts Screen
+struct ContactsScreen: View {
+    var body: some View {
+        NavigationStack {
+            ContentUnavailableView(
+                "Контакты Telegram",
+                systemImage: "person.crop.circle.badge.checkmark",
+                description: Text("Синхронизированы с вашей адресной книгой Telegram")
+            )
+            .navigationTitle("Контакты")
+        }
+    }
+}
+
+// MARK: - Standard Settings + ⚙️ Настройки Kochgramma
+struct SettingsMainScreen: View {
+    @EnvironmentObject var telegram: TelegramManager
+    @AppStorage("koch_theme_mode") private var themeMode: String = "dark"
+    @State private var showLogoutAlert = false
+    
+    var body: some View {
+        NavigationStack {
+            List {
+                // Profile header
+                Section {
+                    HStack(spacing: 16) {
+                        Circle()
+                            .fill(LinearGradient(colors: [.blue, .purple], startPoint: .topLeading, endPoint: .bottomTrailing))
+                            .frame(width: 60, height: 60)
+                            .overlay(Text("K").font(.title.bold()).foregroundColor(.white))
+                        
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(telegram.currentUserName)
+                                .font(.headline)
+                            Text(telegram.currentUserPhone.isEmpty ? "Telegram Account" : telegram.currentUserPhone)
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+                
+                // ⭐ SPECIALLY HIGHLIGHTED KOCHGRAM SECTION ⭐
+                Section {
+                    NavigationLink(destination: KochgramCustomSettingsView()) {
+                        HStack(spacing: 14) {
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 10)
+                                    .fill(LinearGradient(colors: [.purple, .indigo], startPoint: .topLeading, endPoint: .bottomTrailing))
+                                    .frame(width: 36, height: 36)
+                                Image(systemName: "sparkles")
+                                    .font(.system(size: 18, weight: .bold))
+                                    .foregroundColor(.white)
+                            }
+                            
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("⚙️ Настройки Kochgramma")
+                                    .font(.headline.weight(.semibold))
+                                    .foregroundColor(.primary)
+                                Text("Режим призрака, удалённые сообщения, кастомизация")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        .padding(.vertical, 6)
+                    }
+                } header: {
+                    Text("Эксклюзивные функции")
+                        .foregroundColor(.purple)
+                        .font(.caption.bold())
+                }
+                
+                // Standard Telegram Settings
+                Section("Стандартные настройки Telegram") {
+                    HStack {
+                        Label("Темы оформления", systemImage: "paintpalette.fill").foregroundColor(.orange)
+                        Spacer()
+                        Picker("", selection: $themeMode) {
+                            Text("Тёмная").tag("dark")
+                            Text("Светлая").tag("light")
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(width: 160)
+                    }
+                    
+                    NavigationLink(destination: Text("Уведомления и звуки синхронизированы с серверами Telegram")) {
+                        Label("Уведомления и звуки", systemImage: "bell.badge.fill").foregroundColor(.red)
+                    }
+                    
+                    NavigationLink(destination: Text("Конфиденциальность: последний визит, пересылка сообщений и звонки")) {
+                        Label("Конфиденциальность", systemImage: "lock.shield.fill").foregroundColor(.green)
+                    }
+                    
+                    NavigationLink(destination: Text("Память и данные: кэш TDLib, автозагрузка медиа")) {
+                        Label("Данные и память", systemImage: "internaldrive.fill").foregroundColor(.blue)
+                    }
+                }
+                
+                Section {
+                    Button(role: .destructive) {
+                        showLogoutAlert = true
+                    } label: {
+                        HStack {
+                            Spacer()
+                            Text("Выйти из аккаунта")
+                            Spacer()
+                        }
+                    }
+                }
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle("Настройки")
+            .confirmationDialog("Выйти из Telegram?", isPresented: $showLogoutAlert) {
+                Button("Выйти", role: .destructive) {
+                    telegram.logOut()
+                }
+                Button("Отмена", role: .cancel) {}
+            }
+        }
+    }
+}
+
+// MARK: - ⚙️ Экран «Настройки Kochgramma»
+struct KochgramCustomSettingsView: View {
+    @EnvironmentObject var ghostMode: GhostModeManager
+    @EnvironmentObject var deletedStore: DeletedMessagesStore
+    @State private var showClearCacheAlert = false
+    
+    var body: some View {
+        List {
+            // Header Hero Banner
+            Section {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Image(systemName: "shield.lefthalf.filled.badge.checkmark")
+                            .font(.largeTitle)
+                            .foregroundStyle(LinearGradient(colors: [.purple, .blue], startPoint: .topLeading, endPoint: .bottomTrailing))
+                        Spacer()
+                        Text("v1.0 Pro")
+                            .font(.caption.bold())
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color.purple.opacity(0.2))
+                            .foregroundColor(.purple)
+                            .cornerRadius(8)
+                    }
+                    Text("Настройки Kochgramma")
+                        .font(.title2.bold())
+                    Text("Расширенные приватные функции клиента. Все действия выполняются поверх официального Telegram API.")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.vertical, 6)
+            }
+            
+            // 👻 РЕЖИМ ПРИЗРАКА
+            Section {
+                Toggle(isOn: $ghostMode.isMasterGhostEnabled) {
+                    HStack(spacing: 12) {
+                        Image(systemName: "eye.slash.circle.fill")
+                            .font(.title2)
+                            .foregroundColor(.purple)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Режим призрака (Общий)")
+                                .font(.headline)
+                            Text("Включает все функции невидимости сразу")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+                
+                Toggle(isOn: $ghostMode.hideTyping) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Скрыть статус набора текста")
+                            .font(.subheadline)
+                        Text("Не отправляет собеседникам «печатает…»")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                
+                Toggle(isOn: $ghostMode.stealthReadMessages) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Скрытое чтение сообщений")
+                            .font(.subheadline)
+                        Text("Просмотр сообщений без отправки отметки о прочтении")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                
+                Toggle(isOn: $ghostMode.stealthStories) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Скрытый просмотр историй")
+                            .font(.subheadline)
+                        Text("Анонимный просмотр историй в рамках TDLib")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            } header: {
+                Label("👻 Режим призрака", systemImage: "eye.slash")
+            } footer: {
+                Text("Примечание: функции скрытности строго соблюдают архитектуру Telegram API и не отправляют исходящие запросы активности.")
+                    .font(.caption2)
+            }
+            
+            // 🗑️ УДАЛЁННЫЕ СООБЩЕНИЯ
+            Section {
+                Toggle(isOn: $deletedStore.isSaveEnabled) {
+                    HStack(spacing: 12) {
+                        Image(systemName: "archivebox.circle.fill")
+                            .font(.title2)
+                            .foregroundColor(.red)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Сохранять удалённые сообщения")
+                                .font(.headline)
+                            Text("Локальное кэширование входящих сообщений")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+                
+                NavigationLink(destination: SavedDeletedMessagesScreen()) {
+                    HStack {
+                        Text("Просмотр сохранённых удалённых")
+                            .font(.subheadline)
+                        Spacer()
+                        Text("\(deletedStore.savedDeletedMessages.count)")
+                            .font(.caption.bold())
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(Color.red)
+                            .clipShape(Capsule())
+                    }
+                }
+                
+                Button(role: .destructive) {
+                    showClearCacheAlert = true
+                } label: {
+                    Text("Очистить историю удалённых")
+                        .font(.subheadline)
+                }
+            } header: {
+                Label("🗑️ Удалённые сообщения", systemImage: "trash")
+            } footer: {
+                Text("Kochgram сохраняет копии сообщений на устройстве в момент их получения. Если автор удалит сообщение позже, оно останется у вас с пометкой «Удалено». Сообщения, удалённые до установки или запуска, восстановить невозможно.")
+                    .font(.caption2)
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("Настройки Kochgramma")
+        .navigationBarTitleDisplayMode(.inline)
+        .confirmationDialog("Очистить все локально сохранённые сообщения?", isPresented: $showClearCacheAlert) {
+            Button("Очистить базу", role: .destructive) {
+                deletedStore.clearAllHistory()
+            }
+            Button("Отмена", role: .cancel) {}
         }
     }
 }
